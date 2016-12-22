@@ -1,6 +1,8 @@
 # github-scraper
-Language: Go (Golang) 
+
 ![Go gopher](./images/gopherbelly50.jpg)
+
+Language: Go (Golang) 
 
 #### Basic usage:
 ```sh
