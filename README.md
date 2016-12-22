@@ -1,6 +1,6 @@
 # github-scraper
 Language: Go (Golang) 
-![Go gopher](./images/gopherbelly300.jpg)
+![Go gopher](./images/gopherbelly50.jpg)
 
 #### Basic usage:
 ```sh
