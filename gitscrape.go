@@ -4,14 +4,6 @@
 	Author: Justin Chen
 	12.19.2016
 
-    Todo:
-    1. Upload to smallbrain Github
-    2. Give users option to choose target cloning directory
-    3. Code for cleaning directory
-        - Work flow should be:
-            1. Clone
-            2. 
-
 	Boston University 
 	Computer Science
 */
