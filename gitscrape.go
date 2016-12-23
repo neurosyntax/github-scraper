@@ -22,6 +22,7 @@ import (
 	"strings"
 	"bytes"
     "bufio"
+    "sync"
 )
 
 type githubSearchObj struct {
@@ -84,8 +85,9 @@ func main() {
     if !dirExists(dir) {
         os.Mkdir(dir, os.FileMode(0777))
     }
-
-    massivelyClone(search(query), dir)
+    var queryRespObj = search(query)
+    log.Printf("%+v", queryRespObj)
+    //massivelyClone(search(query), dir)
 }
 
 func search(query bytes.Buffer) githubSearchObj {
@@ -125,21 +127,30 @@ func dirExists(dir string)  bool {
 }
 
 func massivelyClone(queryRespObj githubSearchObj, dir string) {
-    //log.Printf("%+v", queryRespObj)
+
+    tasks := make(chan *exec.Cmd, 64)
+
+    // spawn four worker goroutines
+    var wg sync.WaitGroup
+    for i := 0; i < 4; i++ {
+        wg.Add(1)
+        go func() {
+            for cmd := range tasks {
+                cmd.Run()
+            }
+            wg.Done()
+        }()
+    }
+    
     os.Chdir(dir)
     for _, repo := range queryRespObj.Items {
-        cmd := exec.Command("git", "clone", repo.CloneURL)
-        err := cmd.Run()
-        if err != nil {
+        //cmd := exec.Command("git", "clone", repo.CloneURL)
+        tasks <- exec.Command("git", "clone", repo.CloneURL)
+        //err := cmd.Run()
+        //if err != nil {
             // something went wrong
-        }
+        //}
     }
+    close(tasks)
+    wg.Wait()
 }
-
-
-
-
-
-
-
-

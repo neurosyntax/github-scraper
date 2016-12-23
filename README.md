@@ -8,7 +8,7 @@ Language: Go (Golang)
 ```sh
 $ go run gitscrape.go -q <search terms>
 ```
-This will searcg for all repositories that match the specified search terms. You will then be presented with a prompt for a directory name where all the repos will be cloned to.
+This will search for all repositories that match the specified search terms. You will then be presented with a prompt for a directory name where all the repos will be cloned to.
 ```sh
 $ directory to clone all repos to:
 ```
