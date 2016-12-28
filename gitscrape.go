@@ -18,27 +18,96 @@ import (
 	"net/http"
 	"encoding/json"
 	"os"
-    "os/exec"
 	"strings"
 	"bytes"
-    "bufio"
-    "sync"
+    //"bufio"
+    // "reflect"
 )
 
-type githubSearchObj struct {
+// Github Search API response object
+type GithubSearchResp struct {
 	TotalCount int `json:"total_count"`
-	Items []searchItems `json:"items"`
+    // IsIncomplete bool `json:"incomplete_results"`
+	Items []Searchitems `json:"items"`
 }
 
-type searchItems struct {
+type Searchitems struct {
+    // Id int `json:"id"`
 	Name string `json:"name"`
-	CloneURL string `json:"clone_url"`
+    // FullName string `json:"full_name"`
+    Owner OwnerItem `json:"owner"`
+/*    IsPrivate bool `json:"private"`
+    HTMLURL string `json:"html_url"`
+    Description string `json:"description"`
+    IsFork bool `json:"fork"`
+    URL string `json:"url"`
+    CreatedAt string `json:"created_at"`
+    UpdatedAt string `json:"updated_at"`
+    PushedAt string `json:"pushed_at"`
+    Homepage string `json:"homepage"`
+    Size int `json:"size"`
+    Stargazers int `json:"stargazers_count"`
+    Watchers int `json:"watchers_count"`
+    Language string `json:"language"`
+    Forks int `json:"forks_count"`
+    OpenIssues int `json:"open_issues_count"`
+    MasterBranch string `json:"master_branch"`
+    DefaultBranch string `json:"default_branch"`
+    Score float64 `json:"score"`*/
 }
+
+type OwnerItem struct {
+    Login string `json:"login"`
+/*    Id int `json:"id"`
+    AvatarURL string `json:"avatar_url"`
+    GravatarID string `json:"gravatar_id"`
+    URL string `json:"url"`
+    ReceivedEventsURL string `json:"received_events_url"`
+    OwnerType string `json:"url"`*/
+}
+
+// Github content API response object
+type GithubContentResp struct {
+    ContentType string `json:"type"`
+/*    Encoding string `json:"encoding"`
+    Size int `json:"size"`*/
+    Name string `json:"name"`
+/*    Path string `json:"path"`
+    Content string `json:"content"`
+    SHA string `json:"sha"`
+    URL string `json:"url"`
+    GitURL string `json:"git_url"`
+    HTMLURL string `json:"html_url"`
+    DownloadURL string `json:"download_url"`
+    _Links ContentLinks `json:"_links"`*/
+}
+
+type NotFoundResp struct {
+    Message string `json:"message"`
+    DocURL string `json:"documentation_url"`
+}
+
+/*type ContentLinks struct {
+    Git string `json:"git"`
+    Self string `json:"self"`
+    HTML string `json:"html"`
+}*/
+
 
 func main() {
+    /*
+    // Choose directory to save repos to
+    reader := bufio.NewReader(os.Stdin)
+    fmt.Print("directory to clone all repos to: ")
+    dir, _ := reader.ReadString('\n')
+    dir = strings.Replace(dir, "\n", "", -1)
+
+    // Make directory if it does not already exist
+    if !dirExists(dir) {
+        os.Mkdir(dir, os.FileMode(0777))
+    }*/
 
     // Parameters found here: https://developer.github.com/v3/search/
-    fmt.Print("Github search scraper\nSearch options [-q, -i, -size, -forks, -forked, -created, -updated, -user, -repo, -lang, -stars -sort -order]\n")
     flag.String("q", "", "The search terms and any qualifiers.")
     flag.String("in", "", "Qualifies which fields are searched. With this qualifier you can restrict the search to just the repository name, description, readme, or any combination of these.")
     flag.Int("size", 1, "Finds repositories that match a certain size (in kilobytes).")
@@ -54,43 +123,83 @@ func main() {
     flag.Bool("order", false, "The sort order if sort parameter is provided. One of asc (true) or desc (false). Default: false")
     flag.Parse()
 
-    var query bytes.Buffer
-    query.WriteString("https://api.github.com/search/repositories?")
+    var searchQuery bytes.Buffer
+    searchQuery.WriteString("https://api.github.com/search/repositories?")
 
-    // grab all arguments and create the Github search query
+    // Grab all arguments and create the Github search query
     for i, arg := range os.Args {
+        arg = strings.ToLower(arg)
 
     	if i > 0 {
     		if strings.HasPrefix(arg, "-") {
     			if strings.Compare("-q", arg) == 0 {
-	    			query.WriteString("q=")
+	    			searchQuery.WriteString("q=")
 		    	} else if strings.Compare("-sort", arg) == 0 {
-					query.WriteString("&sort=")
+					searchQuery.WriteString("&sort=")
 				} else if strings.Compare("-order", arg) == 0 {
-					query.WriteString("&order=")
+					searchQuery.WriteString("&order=")
 				} else {
-					query.WriteString("+"+arg[1:]+":")
+					searchQuery.WriteString("+"+arg[1:]+":")
 				}
      		} else {
-                query.WriteString(arg)
+                searchQuery.WriteString(arg)
             }
 		}
     }
 
-    reader := bufio.NewReader(os.Stdin)
-    fmt.Print("directory to clone all repos to: ")
-    dir, _ := reader.ReadString('\n')
-    dir = strings.Replace(dir, "\n", "", -1)
+    // Search query
+    var searchResp GithubSearchResp
+    search(searchQuery, &searchResp)
+    // log.Printf("%+v\n", searchResp)
 
-    if !dirExists(dir) {
-        os.Mkdir(dir, os.FileMode(0777))
+
+    for _, repo := range searchResp.Items {
+
+        // url for this particular repo
+        var contentQuery bytes.Buffer
+        contentQuery.WriteString("https://api.github.com/repos/")
+        contentQuery.WriteString(strings.Join([]string{repo.Owner.Login, repo.Name, "contents"}, "/")) //append GET /repos/:owner/:repo/contents/:path, but :path is optional 
+        
+        // Get the contents in the home directory of this repo
+        fmt.Println("next repo")
+        var contentResp []GithubContentResp
+        search(contentQuery, &contentResp)
+
+        // BFS on this repo
+        for (0 < len(contentResp)) {
+
+            // Dequeue
+            cont       := contentResp[0]
+            contentResp = contentResp[1:]
+
+            if strings.Compare(cont.ContentType, "file") == 0 && strings.HasSuffix(cont.Name, ".java") {
+                // Parse file and search for functions of desired type
+            } else if strings.Compare(cont.ContentType, "dir") == 0 {
+                // Construct the url to search this sub-directory
+                var contentDir bytes.Buffer
+                contentDir.WriteString("https://api.github.com/repos/")
+                contentDir.WriteString(strings.Join([]string{repo.Owner.Login, repo.Name, "contents", cont.Name}, "/"))
+                fmt.Println(contentDir.String())
+                var subdirContentResp []GithubContentResp
+                search(contentDir, &subdirContentResp)
+
+                for  _, subdirCont := range subdirContentResp {
+                    // Enqueue contents of sub-directory
+                    if strings.Compare(subdirCont.ContentType, "file") == 0 && strings.HasSuffix(subdirCont.Name, ".java") {
+                        contentResp = append(contentResp, subdirCont)
+                    } else if strings.Compare(subdirCont.ContentType, "dir") == 0 {
+                        subdirCont.Name = strings.Join([]string{cont.Name, subdirCont.Name}, "/")
+                        contentResp = append(contentResp, subdirCont)
+                    }
+                }
+            }
+        }
+        // log.Printf("%+v", contentResp)
     }
-    var queryRespObj = search(query)
-    log.Printf("%+v", queryRespObj)
-    //massivelyClone(search(query), dir)
 }
 
-func search(query bytes.Buffer) githubSearchObj {
+func search(query bytes.Buffer, queryResp interface{}) {
+
     resp, err := http.Get(query.String())
     
     if err != nil {
@@ -104,15 +213,18 @@ func search(query bytes.Buffer) githubSearchObj {
     if err != nil {
         log.Fatal(err)
     }
-
-    var queryRespObj githubSearchObj
-    err = json.Unmarshal(body, &queryRespObj)
-
+    // fmt.Println(len(body))
+    err = json.Unmarshal(body, &queryResp)
+    
     if err != nil {
-        log.Fatal(err)
-    }
+        var errorResp NotFoundResp
+        var badResp = json.Unmarshal(body, &errorResp)
 
-    return queryRespObj
+        if badResp == nil {
+            log.Printf("error: %+v\n", errorResp)
+            log.Fatal()
+        }
+    }
 }
 
 func dirExists(dir string)  bool {
@@ -126,31 +238,20 @@ func dirExists(dir string)  bool {
     return true
 }
 
-func massivelyClone(queryRespObj githubSearchObj, dir string) {
 
-    tasks := make(chan *exec.Cmd, 64)
+/*
+func readLines(path string) ([]string, error) {
+  file, err := os.Open(path)
+  if err != nil {
+    return nil, err
+  }
+  defer file.Close()
 
-    // spawn four worker goroutines
-    var wg sync.WaitGroup
-    for i := 0; i < 4; i++ {
-        wg.Add(1)
-        go func() {
-            for cmd := range tasks {
-                cmd.Run()
-            }
-            wg.Done()
-        }()
-    }
-    
-    os.Chdir(dir)
-    for _, repo := range queryRespObj.Items {
-        //cmd := exec.Command("git", "clone", repo.CloneURL)
-        tasks <- exec.Command("git", "clone", repo.CloneURL)
-        //err := cmd.Run()
-        //if err != nil {
-            // something went wrong
-        //}
-    }
-    close(tasks)
-    wg.Wait()
+  var lines []string
+  scanner := bufio.NewScanner(file)
+  for scanner.Scan() {
+    lines = append(lines, scanner.Text())
+  }
+  return lines, scanner.Err()
 }
+*/
