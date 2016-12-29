@@ -8,9 +8,13 @@ A tool for scraping repositories using Golang and GitHub API v3.
 
 #### Basic usage:
 ```sh
-$ go run gitscrape.go -q <search terms>
+$ go run gitscrape.go -q <search terms> -language <programming language>
+$ username:
+$ password:
 ```
-This will search for all repositories that match the specified search terms. You will then be presented with a prompt for a directory name where all the repos will be cloned to.
+This will search for all repositories that match the specified search terms. You will be prompted for your username and password. Github API's have a "rate limit", which only allows a public IP to make 60 request/hour if the request is not authenticated with a Github account. If the request is made with basic authentication or oauth, a client can make up to 5,000 request/hour.
+
+After authenticating, you will then be presented with a prompt for a directory name where all the repos will be cloned to.
 ```sh
 $ directory to clone all repos to:
 ```
