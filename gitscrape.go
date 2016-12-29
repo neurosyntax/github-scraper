@@ -20,7 +20,7 @@ import (
 	"os"
 	"strings"
 	"bytes"
-    //"bufio"
+    "bufio"
     // "reflect"
 )
 
@@ -95,9 +95,16 @@ type NotFoundResp struct {
 
 
 func main() {
-    /*
     // Choose directory to save repos to
     reader := bufio.NewReader(os.Stdin)
+    fmt.Print("username: ")
+    un, _ := reader.ReadString('\n')
+    un = strings.Replace(un, "\n", "", -1)
+    fmt.Print("password:")
+    pw, _ := reader.ReadString('\n')
+    pw = strings.Replace(pw, "\n", "", -1)
+
+    /*
     fmt.Print("directory to clone all repos to: ")
     dir, _ := reader.ReadString('\n')
     dir = strings.Replace(dir, "\n", "", -1)
@@ -108,6 +115,7 @@ func main() {
     }*/
 
     // Parameters found here: https://developer.github.com/v3/search/
+    flag.String("u", "", "Authenticate with username.")
     flag.String("q", "", "The search terms and any qualifiers.")
     flag.String("in", "", "Qualifies which fields are searched. With this qualifier you can restrict the search to just the repository name, description, readme, or any combination of these.")
     flag.Int("size", 1, "Finds repositories that match a certain size (in kilobytes).")
@@ -138,7 +146,9 @@ func main() {
 					searchQuery.WriteString("&sort=")
 				} else if strings.Compare("-order", arg) == 0 {
 					searchQuery.WriteString("&order=")
-				} else {
+				} else if strings.Compare("-u", arg) == 0 {
+                    searchQuery.WriteString("&u=")
+                } else {
 					searchQuery.WriteString("+"+arg[1:]+":")
 				}
      		} else {
@@ -149,8 +159,8 @@ func main() {
 
     // Search query
     var searchResp GithubSearchResp
-    search(searchQuery, &searchResp)
-    // log.Printf("%+v\n", searchResp)
+    search(searchQuery, &searchResp, un, pw)
+    log.Printf("%+v\n", searchResp)
 
 
     for _, repo := range searchResp.Items {
@@ -163,7 +173,7 @@ func main() {
         // Get the contents in the home directory of this repo
         fmt.Println("next repo")
         var contentResp []GithubContentResp
-        search(contentQuery, &contentResp)
+        search(contentQuery, &contentResp, un, pw)
 
         // BFS on this repo
         for (0 < len(contentResp)) {
@@ -181,13 +191,15 @@ func main() {
                 contentDir.WriteString(strings.Join([]string{repo.Owner.Login, repo.Name, "contents", cont.Name}, "/"))
                 fmt.Println(contentDir.String())
                 var subdirContentResp []GithubContentResp
-                search(contentDir, &subdirContentResp)
+                search(contentDir, &subdirContentResp, un, pw)
 
                 for  _, subdirCont := range subdirContentResp {
                     // Enqueue contents of sub-directory
                     if strings.Compare(subdirCont.ContentType, "file") == 0 && strings.HasSuffix(subdirCont.Name, ".java") {
                         contentResp = append(contentResp, subdirCont)
                     } else if strings.Compare(subdirCont.ContentType, "dir") == 0 {
+                        // If a directory, need to prepend current dir's name to its subdir's name so it can search correctly
+                        // in the outter loop above
                         subdirCont.Name = strings.Join([]string{cont.Name, subdirCont.Name}, "/")
                         contentResp = append(contentResp, subdirCont)
                     }
@@ -198,9 +210,13 @@ func main() {
     }
 }
 
-func search(query bytes.Buffer, queryResp interface{}) {
+func search(query bytes.Buffer, queryResp interface{}, username string, password string) {
 
-    resp, err := http.Get(query.String())
+    client := &http.Client{}
+    req, err := http.NewRequest("GET", query.String(), nil)
+    req.SetBasicAuth(username, password)
+    resp, err := client.Do(req)
+    // resp, err := http.Get(query.String())
     
     if err != nil {
         log.Fatal(err)
@@ -254,4 +270,34 @@ func readLines(path string) ([]string, error) {
   }
   return lines, scanner.Err()
 }
+
+func massivelyClone(queryRespObj githubSearchObj, dir string) {
+
+    tasks := make(chan *exec.Cmd, 64)
+
+    // spawn four worker goroutines
+    var wg sync.WaitGroup
+    for i := 0; i < 4; i++ {
+        wg.Add(1)
+        go func() {
+            for cmd := range tasks {
+                cmd.Run()
+            }
+            wg.Done()
+        }()
+    }
+    
+    os.Chdir(dir)
+    for _, repo := range queryRespObj.Items {
+        //cmd := exec.Command("git", "clone", repo.CloneURL)
+        tasks <- exec.Command("git", "clone", repo.CloneURL)
+        //err := cmd.Run()
+        //if err != nil {
+            // something went wrong
+        //}
+    }
+    close(tasks)
+    wg.Wait()
+}
+
 */

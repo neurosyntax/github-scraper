@@ -4,6 +4,8 @@
 
 Language: Go (Golang) 
 
+A tool for scraping repositories using Golang and GitHub API v3.
+
 #### Basic usage:
 ```sh
 $ go run gitscrape.go -q <search terms>
@@ -17,3 +19,4 @@ Look here for more details: [Search code parameters](https://developer.github.co
 ```sh
 [-q, -i, -size, -forks, -forked, -created, -updated, -user, -repo, -lang, -stars -sort -order]
 ```
+Github's API expects the flags to be ordered as in the list above for correct results.
