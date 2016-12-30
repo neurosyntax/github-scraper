@@ -77,9 +77,9 @@ type GithubContentResp struct {
     SHA string `json:"sha"`
     URL string `json:"url"`
     GitURL string `json:"git_url"`
-    HTMLURL string `json:"html_url"`
+    HTMLURL string `json:"html_url"`*/
     DownloadURL string `json:"download_url"`
-    _Links ContentLinks `json:"_links"`*/
+    // _Links ContentLinks `json:"_links"`
 }
 
 type NotFoundResp struct {
@@ -96,6 +96,7 @@ type NotFoundResp struct {
 
 func main() {
     // Choose directory to save repos to
+    // Need to add feature to hide credentials as they are entered into the terminal
     reader := bufio.NewReader(os.Stdin)
     fmt.Print("username: ")
     un, _ := reader.ReadString('\n')
@@ -104,7 +105,7 @@ func main() {
     pw, _ := reader.ReadString('\n')
     pw = strings.Replace(pw, "\n", "", -1)
 
-    /*
+    // Directory all desired repos will be cloned to    
     fmt.Print("directory to clone all repos to: ")
     dir, _ := reader.ReadString('\n')
     dir = strings.Replace(dir, "\n", "", -1)
@@ -112,7 +113,12 @@ func main() {
     // Make directory if it does not already exist
     if !dirExists(dir) {
         os.Mkdir(dir, os.FileMode(0777))
-    }*/
+    }
+
+    // Make a tmp directory for cloning files into when checking their function types
+    if !dirExists("tmp") {
+        os.Mkdir("tmp", os.FileMode(0777))
+    }
 
     // Parameters found here: https://developer.github.com/v3/search/
     flag.String("u", "", "Authenticate with username.")
@@ -160,15 +166,14 @@ func main() {
     // Search query
     var searchResp GithubSearchResp
     search(searchQuery, &searchResp, un, pw)
-    log.Printf("%+v\n", searchResp)
-
+    // log.Printf("%+v\n", searchResp)
 
     for _, repo := range searchResp.Items {
 
         // url for this particular repo
         var contentQuery bytes.Buffer
         contentQuery.WriteString("https://api.github.com/repos/")
-        contentQuery.WriteString(strings.Join([]string{repo.Owner.Login, repo.Name, "contents"}, "/")) //append GET /repos/:owner/:repo/contents/:path, but :path is optional 
+        contentQuery.WriteString(strings.Join([]string{repo.Owner.Login, repo.Name, "contents"}, "/"))
         
         // Get the contents in the home directory of this repo
         fmt.Println("next repo")
@@ -182,8 +187,11 @@ func main() {
             cont       := contentResp[0]
             contentResp = contentResp[1:]
 
-            if strings.Compare(cont.ContentType, "file") == 0 && strings.HasSuffix(cont.Name, ".java") {
-                // Parse file and search for functions of desired type
+            if strings.Compare(cont.ContentType, "file") == 0 && strings.HasSuffix(cont.Name, ".py") {
+                saveFile(cont.Name, httpGet(cont.DownloadURL))
+                containsFuncType(cont.Name)
+                log.Fatal()
+
             } else if strings.Compare(cont.ContentType, "dir") == 0 {
                 // Construct the url to search this sub-directory
                 var contentDir bytes.Buffer
@@ -206,7 +214,6 @@ func main() {
                 }
             }
         }
-        // log.Printf("%+v", contentResp)
     }
 }
 
@@ -216,20 +223,12 @@ func search(query bytes.Buffer, queryResp interface{}, username string, password
     req, err := http.NewRequest("GET", query.String(), nil)
     req.SetBasicAuth(username, password)
     resp, err := client.Do(req)
-    // resp, err := http.Get(query.String())
     
-    if err != nil {
-        log.Fatal(err)
-    }
-
+    check(err)
     defer resp.Body.Close()
-
     body, err := ioutil.ReadAll(resp.Body)
 
-    if err != nil {
-        log.Fatal(err)
-    }
-    // fmt.Println(len(body))
+    check(err)
     err = json.Unmarshal(body, &queryResp)
     
     if err != nil {
@@ -243,20 +242,64 @@ func search(query bytes.Buffer, queryResp interface{}, username string, password
     }
 }
 
+/*
+    http.Get() doesn't count towards the rate limit unless the URL is an API call
+    e.g. Anything beginning with https://api.github.com/
+    This is only used for extracting the source code from the repos and checking the function types
+*/
+func httpGet(url string) string {
+    resp, err := http.Get(url)
+    
+    check(err)
+    defer resp.Body.Close()
+
+    body, err := ioutil.ReadAll(resp.Body)
+
+    return string(body)
+}
+
+func saveFile(fileName string, fileBody string) {
+    f, err := os.Create("tmp/"+fileName)
+    
+    check(err)
+    defer f.Close()
+
+    _, err = f.WriteString(fileBody)
+    check(err)
+    f.Sync()
+}
+
 func dirExists(dir string)  bool {
     _, err := os.Stat(dir)
+    
     if err == nil {
         return true
-    }
-    if os.IsNotExist(err) {
+    } else if os.IsNotExist(err) {
         return false
+    } else {
+        return true
     }
-    return true
+}
+    
+func check(e error) {
+    if e != nil {
+        log.Fatal(e)
+    }
+}
+
+/*
+    Assumes that the file was saved into ./tmp
+*/
+func containsFuncType(fileName string) bool {
+    // Assumes Java by grepping method
+    cmd := exec.Command("ctags -x --c-types=f ./cont.Name | grep method | awk '{$1=$2=$3=$4=""; print $0}'")
+    err := cmd.Run()
+    check(err)
+    
 }
 
 
-/*
-func readLines(path string) ([]string, error) {
+/*func readLines(path string) ([]string, error) {
   file, err := os.Open(path)
   if err != nil {
     return nil, err
@@ -298,6 +341,4 @@ func massivelyClone(queryRespObj githubSearchObj, dir string) {
     }
     close(tasks)
     wg.Wait()
-}
-
-*/
+}*/
