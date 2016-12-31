@@ -25,6 +25,7 @@ import (
 	"strings"
 	"bytes"
     "bufio"
+    "sync"
 )
 
 // Github Search API response object
@@ -39,6 +40,7 @@ type Searchitems struct {
 	Name string `json:"name"`
     // FullName string `json:"full_name"`
     Owner OwnerItem `json:"owner"`
+    CloneURL string `json:"clone_url"`
 /*    IsPrivate bool `json:"private"`
     HTMLURL string `json:"html_url"`
     Description string `json:"description"`
@@ -99,6 +101,9 @@ type NotFoundResp struct {
 
 func main() {
 
+    // Load programming language terminology for functions
+    // loadFuncTerms()
+
     // Choose directory to save repos to
     // Need to add feature to hide credentials as they are entered into the terminal
     reader := bufio.NewReader(os.Stdin)
@@ -109,7 +114,7 @@ func main() {
     pw, _ := reader.ReadString('\n')
     pw = strings.Replace(pw, "\n", "", -1)
 
-/*    // Directory all desired repos will be cloned to    
+    // Directory all desired repos will be cloned to    
     fmt.Print("directory to clone all repos to: ")
     dir, _ := reader.ReadString('\n')
     dir = strings.Replace(dir, "\n", "", -1)
@@ -117,7 +122,7 @@ func main() {
     // Make directory if it does not already exist
     if !dirExists(dir) {
         os.Mkdir(dir, os.FileMode(0777))
-    }*/
+    }
 
     // Make a tmp directory for cloning files into when checking their function types
     if !dirExists("tmp") {
@@ -167,6 +172,20 @@ func main() {
 		}
     }
 
+    // Spawn four worker goroutines
+    tasks := make(chan func(), 2)
+    var wg sync.WaitGroup
+
+    for i := 0; i < 4; i++ {
+        wg.Add(1)
+        go func() {
+            for f := range tasks {
+                f()
+            }
+            wg.Done()
+        }()
+    }
+
     // Search query
     var searchResp GithubSearchResp
     search(searchQuery, &searchResp, un, pw)
@@ -191,13 +210,16 @@ func main() {
             cont       := contentResp[0]
             contentResp = contentResp[1:]
 
-            if strings.Compare(cont.ContentType, "file") == 0 && strings.HasSuffix(cont.Name, ".py") {
+            if strings.Compare(cont.ContentType, "file") == 0 && strings.HasSuffix(cont.Name, ".java") {
                 saveFile(cont.Name, httpGet(cont.DownloadURL))
 
                 // Should prompt user for desired function type and even give them a feature for specifying type of search
                 // Maybe they don't want to search for function types
-                containsFuncType(cont.Name, "int", "int")
-                log.Fatal()
+                tasks <- func() {
+                    findAndClone(dir,repo.Name, repo.CloneURL, cont.Name, "int", "int")
+                }
+                // findAndClone(repo.CloneURL, cont.Name, inType, outType)
+                // log.Fatal()
 
             } else if strings.Compare(cont.ContentType, "dir") == 0 {
                 // Construct the url to search this sub-directory
@@ -222,6 +244,9 @@ func main() {
             }
         }
     }
+
+    close(tasks)
+    wg.Wait()
 }
 
 func search(query bytes.Buffer, queryResp interface{}, username string, password string) {
@@ -247,6 +272,12 @@ func search(query bytes.Buffer, queryResp interface{}, username string, password
             log.Fatal()
         }
     }
+}
+
+func loadFuncTerms() {
+    // Read in txt file
+    // Loop and build string-to-string map
+    // Return map
 }
 
 /*
@@ -294,6 +325,17 @@ func check(e error) {
     }
 }
 
+func findAndClone(cloneDir string, repoName string, repoURL string, fileName string, inType string, outType string) {
+    if containsFuncType(fileName, inType, outType) {
+        cloneRepo(cloneDir, repoName, repoURL)
+    }
+}
+
+func cloneRepo(cloneDir string, repoName string, repoURL string) {
+    err := exec.Command("git", "clone", repoURL, strings.Join([]string{cloneDir, repoName}, "/")).Run()
+    check(err)
+}
+
 /*
     Searches source code for functions with inType input and outType output
     Assumes that the file was saved into ./tmp
@@ -304,9 +346,9 @@ func containsFuncType(fileName string, inType string, outType string) bool {
     // then return what ctags refers to functions as in that language
     // e.g. functions are referred to as members in Python and methods in Java
     // then replace the second string below in the grep command
-    fmt.Println(fileName)
+
     ctags := exec.Command("ctags", "-x", "--c-types=f", "tmp/"+fileName)
-    grep  := exec.Command("grep", "member")
+    grep  := exec.Command("grep", "method")//getFuncRef(fileName))
     awk   := exec.Command("awk", "{$1=$2=$3=$4=\"\"; print $0}")
     grep.Stdin, _ = ctags.StdoutPipe()
     awk.Stdin, _  = grep.StdoutPipe()
@@ -326,12 +368,51 @@ func containsFuncType(fileName string, inType string, outType string) bool {
 
     fmt.Println(funcHeaders)
 
-    // evaluate exuberant ctags output and return boolean if matches
+    for _, header := range funcHeaders {
+        headerSplit  := strings.Split(header, "(")
+        outHeader    := headerSplit[0]
+        inHeader     := headerSplit[1]
+        outTypeIndex := strings.Index(outHeader, outType)
+        inTypeIndex  := strings.Index(inHeader, inType)
+        
+        if inTypeIndex > 0 && outTypeIndex > 0 {
+            return true
+        }
+    }
+
     return false
 }
 
+/*
+func massivelyClone(queryRespObj githubSearchObj, dir string) {
 
-/*func readLines(path string) ([]string, error) {
+    tasks := make(chan *exec.Cmd, 64)
+
+    // spawn four worker goroutines
+    var wg sync.WaitGroup
+
+    for i := 0; i < 4; i++ {
+        wg.Add(1)
+        go func() {
+            for cmd := range tasks {
+                cmd.Run()
+            }
+            wg.Done()
+        }()
+    }
+    
+    // os.Chdir(dir)
+
+    for _, repo := range queryRespObj.Items {
+        tasks <- exec.Command("git", "clone", repo.CloneURL)
+    }
+
+    close(tasks)
+    wg.Wait()
+}
+
+
+func readLines(path string) ([]string, error) {
   file, err := os.Open(path)
   if err != nil {
     return nil, err
@@ -344,33 +425,4 @@ func containsFuncType(fileName string, inType string, outType string) bool {
     lines = append(lines, scanner.Text())
   }
   return lines, scanner.Err()
-}
-
-func massivelyClone(queryRespObj githubSearchObj, dir string) {
-
-    tasks := make(chan *exec.Cmd, 64)
-
-    // spawn four worker goroutines
-    var wg sync.WaitGroup
-    for i := 0; i < 4; i++ {
-        wg.Add(1)
-        go func() {
-            for cmd := range tasks {
-                cmd.Run()
-            }
-            wg.Done()
-        }()
-    }
-    
-    os.Chdir(dir)
-    for _, repo := range queryRespObj.Items {
-        //cmd := exec.Command("git", "clone", repo.CloneURL)
-        tasks <- exec.Command("git", "clone", repo.CloneURL)
-        //err := cmd.Run()
-        //if err != nil {
-            // something went wrong
-        //}
-    }
-    close(tasks)
-    wg.Wait()
 }*/
