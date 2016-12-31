@@ -6,6 +6,9 @@
 
 	Boston University 
 	Computer Science
+
+    Dependencies:      exuberant ctags
+    Operating systems: GNU Linux, OS X
 */
 
 package main
@@ -18,10 +21,10 @@ import (
 	"net/http"
 	"encoding/json"
 	"os"
+    "os/exec"
 	"strings"
 	"bytes"
     "bufio"
-    // "reflect"
 )
 
 // Github Search API response object
@@ -95,6 +98,7 @@ type NotFoundResp struct {
 
 
 func main() {
+
     // Choose directory to save repos to
     // Need to add feature to hide credentials as they are entered into the terminal
     reader := bufio.NewReader(os.Stdin)
@@ -105,7 +109,7 @@ func main() {
     pw, _ := reader.ReadString('\n')
     pw = strings.Replace(pw, "\n", "", -1)
 
-    // Directory all desired repos will be cloned to    
+/*    // Directory all desired repos will be cloned to    
     fmt.Print("directory to clone all repos to: ")
     dir, _ := reader.ReadString('\n')
     dir = strings.Replace(dir, "\n", "", -1)
@@ -113,7 +117,7 @@ func main() {
     // Make directory if it does not already exist
     if !dirExists(dir) {
         os.Mkdir(dir, os.FileMode(0777))
-    }
+    }*/
 
     // Make a tmp directory for cloning files into when checking their function types
     if !dirExists("tmp") {
@@ -189,7 +193,10 @@ func main() {
 
             if strings.Compare(cont.ContentType, "file") == 0 && strings.HasSuffix(cont.Name, ".py") {
                 saveFile(cont.Name, httpGet(cont.DownloadURL))
-                containsFuncType(cont.Name)
+
+                // Should prompt user for desired function type and even give them a feature for specifying type of search
+                // Maybe they don't want to search for function types
+                containsFuncType(cont.Name, "int", "int")
                 log.Fatal()
 
             } else if strings.Compare(cont.ContentType, "dir") == 0 {
@@ -288,14 +295,39 @@ func check(e error) {
 }
 
 /*
+    Searches source code for functions with inType input and outType output
     Assumes that the file was saved into ./tmp
 */
-func containsFuncType(fileName string) bool {
-    // Assumes Java by grepping method
-    cmd := exec.Command("ctags -x --c-types=f ./cont.Name | grep method | awk '{$1=$2=$3=$4=""; print $0}'")
-    err := cmd.Run()
-    check(err)
-    
+func containsFuncType(fileName string, inType string, outType string) bool {
+    // Determine file type using extension in fileName
+    // make a separate function with a lookup table for extension types
+    // then return what ctags refers to functions as in that language
+    // e.g. functions are referred to as members in Python and methods in Java
+    // then replace the second string below in the grep command
+    fmt.Println(fileName)
+    ctags := exec.Command("ctags", "-x", "--c-types=f", "tmp/"+fileName)
+    grep  := exec.Command("grep", "member")
+    awk   := exec.Command("awk", "{$1=$2=$3=$4=\"\"; print $0}")
+    grep.Stdin, _ = ctags.StdoutPipe()
+    awk.Stdin, _  = grep.StdoutPipe()
+    awkOut, _    := awk.StdoutPipe()
+    buff := bufio.NewScanner(awkOut)
+    var funcHeaders []string
+
+    _ = grep.Start()
+    _ = awk.Start()
+    _ = ctags.Run()
+    _ = grep.Wait()
+    defer awk.Wait()
+
+    for buff.Scan() {    
+        funcHeaders = append(funcHeaders, buff.Text()+"\n")
+    }
+
+    fmt.Println(funcHeaders)
+
+    // evaluate exuberant ctags output and return boolean if matches
+    return false
 }
 
 
