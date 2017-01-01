@@ -26,6 +26,7 @@ import (
 	"bytes"
     "bufio"
     "sync"
+    "runtime"
 )
 
 // Github Search API response object
@@ -120,12 +121,12 @@ func main() {
     dir = strings.Replace(dir, "\n", "", -1)
 
     // Make directory if it does not already exist
-    if !dirExists(dir) {
+    if !pathExists(dir) {
         os.Mkdir(dir, os.FileMode(0777))
     }
 
     // Make a tmp directory for cloning files into when checking their function types
-    if !dirExists("tmp") {
+    if !pathExists("tmp") {
         os.Mkdir("tmp", os.FileMode(0777))
     }
 
@@ -176,7 +177,7 @@ func main() {
     tasks := make(chan func(), 2)
     var wg sync.WaitGroup
 
-    for i := 0; i < 4; i++ {
+    for i := 0; i < runtime.NumCPU(); i++ {
         wg.Add(1)
         go func() {
             for f := range tasks {
@@ -247,6 +248,8 @@ func main() {
 
     close(tasks)
     wg.Wait()
+
+    cleanTmp()
 }
 
 func search(query bytes.Buffer, queryResp interface{}, username string, password string) {
@@ -256,10 +259,12 @@ func search(query bytes.Buffer, queryResp interface{}, username string, password
     req.SetBasicAuth(username, password)
     resp, err := client.Do(req)
     
+    // fmt.Println("Here 1")
     check(err)
     defer resp.Body.Close()
     body, err := ioutil.ReadAll(resp.Body)
 
+    // fmt.Println("Here 2")
     check(err)
     err = json.Unmarshal(body, &queryResp)
     
@@ -288,6 +293,7 @@ func loadFuncTerms() {
 func httpGet(url string) string {
     resp, err := http.Get(url)
     
+    // fmt.Println("Here 3")
     check(err)
     defer resp.Body.Close()
 
@@ -297,17 +303,19 @@ func httpGet(url string) string {
 }
 
 func saveFile(fileName string, fileBody string) {
-    f, err := os.Create("tmp/"+fileName)
+    f, err := os.Create(strings.Join([]string{"tmp", fileName}, "/"))
     
+    // fmt.Println("Here 4")
     check(err)
     defer f.Close()
 
     _, err = f.WriteString(fileBody)
+    // fmt.Println("Here 5")
     check(err)
     f.Sync()
 }
 
-func dirExists(dir string)  bool {
+func pathExists(dir string)  bool {
     _, err := os.Stat(dir)
     
     if err == nil {
@@ -321,6 +329,7 @@ func dirExists(dir string)  bool {
     
 func check(e error) {
     if e != nil {
+        fmt.Println("fatal: exiting...")
         log.Fatal(e)
     }
 }
@@ -328,12 +337,22 @@ func check(e error) {
 func findAndClone(cloneDir string, repoName string, repoURL string, fileName string, inType string, outType string) {
     if containsFuncType(fileName, inType, outType) {
         cloneRepo(cloneDir, repoName, repoURL)
+    } else {
+        source := strings.Join([]string{"tmp", fileName}, "/")
+        if pathExists(source) {
+            os.Remove(source)
+        }
     }
 }
 
 func cloneRepo(cloneDir string, repoName string, repoURL string) {
-    err := exec.Command("git", "clone", repoURL, strings.Join([]string{cloneDir, repoName}, "/")).Run()
-    check(err)
+    cloneDir = strings.Join([]string{cloneDir, repoName}, "/")
+    
+    if !pathExists(cloneDir) {
+        exec.Command("git", "clone", repoURL, cloneDir).Run()
+        // fmt.Println(repoURL)
+        // check(err)
+    }
 }
 
 /*
@@ -347,7 +366,9 @@ func containsFuncType(fileName string, inType string, outType string) bool {
     // e.g. functions are referred to as members in Python and methods in Java
     // then replace the second string below in the grep command
 
-    ctags := exec.Command("ctags", "-x", "--c-types=f", "tmp/"+fileName)
+    source := strings.Join([]string{"tmp", fileName}, "/")
+
+    ctags := exec.Command("ctags", "-x", "--c-types=f", source)
     grep  := exec.Command("grep", "method")//getFuncRef(fileName))
     awk   := exec.Command("awk", "{$1=$2=$3=$4=\"\"; print $0}")
     grep.Stdin, _ = ctags.StdoutPipe()
@@ -370,18 +391,29 @@ func containsFuncType(fileName string, inType string, outType string) bool {
 
     for _, header := range funcHeaders {
         headerSplit  := strings.Split(header, "(")
-        outHeader    := headerSplit[0]
-        inHeader     := headerSplit[1]
-        outTypeIndex := strings.Index(outHeader, outType)
-        inTypeIndex  := strings.Index(inHeader, inType)
-        
-        if inTypeIndex > 0 && outTypeIndex > 0 {
-            return true
+
+        if len(headerSplit) == 2 {
+            outHeader    := headerSplit[0]
+            inHeader     := headerSplit[1]
+            outTypeIndex := strings.Index(outHeader, outType)
+            inTypeIndex  := strings.Index(inHeader, inType)
+            
+            if inTypeIndex > 0 && outTypeIndex > 0 {
+                return true
+            }
         }
     }
 
     return false
 }
+
+/*
+    Deletes tmp dir
+*/
+func cleanTmp() {
+    os.RemoveAll("tmp")
+}
+
 
 /*
 func massivelyClone(queryRespObj githubSearchObj, dir string) {
