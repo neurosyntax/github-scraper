@@ -1,6 +1,7 @@
 package parse
 
 import (
+	// "fmt"
 	"strings"
 )
 
@@ -15,22 +16,27 @@ func ParseFuncHeader (header string, inTypeList []string, outTypeList []string, 
 
 	    if len(nonParameters) > 2 {
 
-	        // Assuming Java syntax. 
-	        // Return type is always second keyword after the visibility modifer in the function header.
-	        rtnType := nonParameters[1]
-
-	        for _, r := range outTypeList {
-	            if strings.Compare(rtnType, r) == 0 {
-	                hasRtn   = true
-	                *outType = rtnType 
-	                break
-	            }
-	        }
+	        for _, t := range nonParameters {
+	        	// fmt.Println(t)
+		        for _, r := range outTypeList {
+		            if strings.Compare(t, r) == 0 {
+		                hasRtn   = true
+		                *outType = t 
+		                break
+		            }
+		        }
+		        if hasRtn {
+		        	break
+		        }
+		    }
 	    }
+
+	    // fmt.Println(hasRtn)
 
 	    if hasRtn {
 	        hasParameters := false
 	        parameters    := strings.Split(strings.Split(split[1], ")")[0], " ")
+	        // fmt.Println(parameters)
 	        var trackParams []string
 	        // fmt.Println(parameters)
 
@@ -41,14 +47,11 @@ func ParseFuncHeader (header string, inTypeList []string, outTypeList []string, 
 	                    if strings.Compare(t, s) == 0 {
 	                        hasParameters = true
 	                        trackParams = append(trackParams, s)
-	                    } else {
-	                    	*outType = ""
-	                    	*inType  = ""
-	                    	return false
 	                    }
-
 	                }
 	            }
+
+	            // fmt.Println("hasParameters: ",hasParameters)
 
 	            if !hasParameters {
 	                break
@@ -57,9 +60,12 @@ func ParseFuncHeader (header string, inTypeList []string, outTypeList []string, 
 	            }
 	        }
 
-	        if hasParameters && hasRtn {
+	        if hasParameters {
 	        	atLeastOne = true
 	            *funcNames = append(*funcNames, header)
+	        } else {
+            	*outType = ""
+            	*inType  = ""
 	        }
 	    }
 	}
