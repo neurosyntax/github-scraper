@@ -630,11 +630,11 @@ func containsFuncType(fileName string, inTypeList []string, outTypeList []string
 
     for _, header := range funcHeaders {
         header = strings.TrimSpace(strings.Split(header, "//")[0])
-        parsedHeader := parseFuncHeader(header, inTypeList, outTypeList, funcNames, inType, outType)
+        parsedHeader := parse.ParseFuncHeader(header, inTypeList, outTypeList, funcNames, inType, outType)
 
-        if parsedHeader != nil {
+        if parsedHeader {
             atLeastOne = true
-            funcHeaders = append(funcHeaders, parsedHeader)
+            funcHeaders = append(funcHeaders, header)
         }
     }
 
