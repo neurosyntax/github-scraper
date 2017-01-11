@@ -31,6 +31,7 @@ import (
     "time"
     "gopkg.in/mgo.v2"
     "gopkg.in/mgo.v2/bson"
+    "parse"
 )
 
 // Github Search API response object
@@ -142,11 +143,6 @@ func (f FuncDoc) getObjectIdStr() string {
     return strings.Split(f.Id.String(), "\"")[1]
 }
 
-/*type FuncMgoDoc struct {
-    FuncDoc
-    Id bson.ObjectId `json:"id" bson:"_id,omitempty"`
-}*/
-
 type FuncAST struct {
     Id bson.ObjectId `json:"id" bson:"_id,omitempty"`
     FuncID string
@@ -158,11 +154,6 @@ func (ast FuncAST) getObjectIdStr() string {
     return strings.Split(ast.Id.String(), "\"")[1]
 }
 
-/*type MgoFuncAST struct {
-    FuncAST
-    Id bson.ObjectId `json:"id" bson:"_id,omitempty"`
-}*/
-
 type FuncCFG struct {
     Id bson.ObjectId `json:"id" bson:"_id,omitempty"`
     FuncID string
@@ -173,11 +164,6 @@ type FuncCFG struct {
 func (cfg FuncCFG) getObjectIdStr() string {
     return strings.Split(cfg.Id.String(), "\"")[1]
 }
-
-/*type MgoFuncCFG struct {
-    FuncCFG
-    Id bson.ObjectId `json:"id" bson:"_id,omitempty"`
-}*/
 
 func main() {
 
@@ -644,59 +630,11 @@ func containsFuncType(fileName string, inTypeList []string, outTypeList []string
 
     for _, header := range funcHeaders {
         header = strings.TrimSpace(strings.Split(header, "//")[0])
-        split := strings.Split(header, "(")
-        
-        if len(split) == 2 {
-            // Check return type
-            hasRtn        := false
-            nonParameters := strings.Split(split[0], " ")
+        parsedHeader := parseFuncHeader(header, inTypeList, outTypeList, funcNames, inType, outType)
 
-            if len(nonParameters) > 2 {
-
-                // Assuming Java syntax. 
-                // Return type is always second keyword after the visibility modifer in the function header.
-                rtnType := nonParameters[1]
-
-                for _, r := range outTypeList {
-                    if strings.Compare(rtnType, r) == 0 {
-                        hasRtn   = true
-                        *outType = rtnType 
-                        break
-                    }
-                }
-            }
-
-            if hasRtn {
-                hasParameters := true
-                parameters    := strings.Split(strings.Split(split[1], ")")[0], " ")
-                var trackParams []string
-                // fmt.Println(parameters)
-
-                // Check function parameters
-                for i, t := range parameters {
-                    if i % 2 == 0 {
-                        for _, s := range inTypeList {
-                            if strings.Compare(t, s) != 0 {
-                                hasParameters = false
-                                break
-                            } else {
-                                trackParams = append(trackParams, s)
-                            }
-                        }
-                    }
-
-                    if !hasParameters {
-                        break
-                    } else {
-                        *inType = strings.Join(trackParams, " ")
-                    }
-                }
-
-                if hasParameters && hasRtn {
-                    *funcNames = append(*funcNames, header)
-                    atLeastOne = true
-                }
-            }
+        if parsedHeader != nil {
+            atLeastOne = true
+            funcHeaders = append(funcHeaders, parsedHeader)
         }
     }
 
