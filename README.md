@@ -1,6 +1,6 @@
-# github-scraper![Go gopher](./images/gopherbelly50.jpg)
+# github-scraper![Laughing Cat](./images/laughingcat.png)
 
-Language: Go (Golang) 
+Language: Go (Golang)![Go gopher](./images/gopherbelly50.jpg)
 
 A tool for scraping repositories using Golang and GitHub API v3.
 
