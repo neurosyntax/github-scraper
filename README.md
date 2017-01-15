@@ -1,4 +1,4 @@
-# github-scraper ![Go gopher](./images/gopherbelly50.jpg)
+# ![Go gopher](./images/gopherbelly50.jpg) github-scraper
 
 Language: Go (Golang) 
 
