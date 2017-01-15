@@ -51,9 +51,9 @@ type Searchitems struct {
     HTMLURL string `json:"html_url"`
     Description string `json:"description"`
     IsFork bool `json:"fork"`
-    URL string `json:"url"`
+    URL string `json:"url"`*/
     CreatedAt string `json:"created_at"`
-    UpdatedAt string `json:"updated_at"`
+    /*UpdatedAt string `json:"updated_at"`
     PushedAt string `json:"pushed_at"`
     Homepage string `json:"homepage"`*/
     SizeKB int `json:"size"`
@@ -122,11 +122,6 @@ func (r RepoDoc) getObjectIdStr() string {
     return strings.Split(r.Id.String(), "\"")[1]
 }
 
-/*type RepoMgoDoc struct {
-    RepoDoc
-    Id bson.ObjectId `json:"id" bson:"_id,omitempty"`
-}*/
-
 type FuncDoc struct {
     Id bson.ObjectId `json:"id" bson:"_id,omitempty"`
     RepoId string
@@ -166,7 +161,7 @@ func (cfg FuncCFG) getObjectIdStr() string {
 }
 
 func main() {
-
+    runtime.GOMAXPROCS(runtime.NumCPU())
     // Load programming language terminology for functions
     // loadFuncTerms()
 
@@ -189,12 +184,27 @@ func main() {
     pw := ""
 
     if didAuth {
-        fmt.Print("username: ")
-        un, _ = reader.ReadString('\n')
-        un = strings.Replace(un, "\n", "", -1)
-        fmt.Print("password:")
-        pw, _ = reader.ReadString('\n')
-        pw = strings.Replace(pw, "\n", "", -1)
+
+        un, pw = getAuth()
+
+        if len(un) == 0 && len(pw) == 0 {
+            fmt.Print("username: ")
+            un, _ = reader.ReadString('\n')
+            un = strings.Replace(un, "\n", "", -1)
+            fmt.Print("password:")
+            pw, _ = reader.ReadString('\n')
+            pw = strings.Replace(pw, "\n", "", -1)
+            fmt.Print("save credentials[y/n]: ")
+            sc, _ = reader.ReadString('\n')
+            sc = strings.ToLower(strings.Replace(sc, "\n", "", -1))
+
+            if strings.Compare(sc, "y") == 0 || strings.Compare(sc, "yes") == 0 {
+                if !pathExists(".auth") {
+                    os.Mkdir(".auth", os.FileMode(0777))
+                }
+                saveFile(".auth", "login", strings.Join([]string{un, pw}, "\n"))
+            }
+        }
     }
 
     // Directory all desired repos will be cloned to    
@@ -249,10 +259,11 @@ func main() {
     if !loadCheckpoint {
         var searchQuery bytes.Buffer
 
-        searchQuery.WriteString("https://api.github.com/search/repositories?")
+        searchQuery.WriteString("https://api.github.com/search/repositories?q=language:Java&per_page=100")
 
         // Grab all arguments and create the Github search query
-        for i, arg := range os.Args {
+        // Needs fixing, so commented out for now
+/*        for i, arg := range os.Args {
             arg = strings.ToLower(arg)
 
         	if i > 0 {
@@ -272,16 +283,18 @@ func main() {
                     searchQuery.WriteString(arg)
                 }
     		}
-        }
+        }*/
 
         searchQueue = append(searchQueue, searchQuery)
+
+        isTimeoutSet := false
 
         // searchQueue used in case need to wait for timeout to end
         for 0 < len(searchQueue) {
             searchItem := searchQueue[0]
             searchQueue = searchQueue[:len(searchQueue)-1]
             successfulSearchQuery := search(searchItem, &searchResp, un, pw)
-            // log.Printf("%+v\n", searchResp)
+
             if !successfulSearchQuery {
                 searchQueue = append(searchQueue, searchItem)
                 sleepAndSave(searchResp)
@@ -298,20 +311,22 @@ func main() {
     for i := 0; i < runtime.NumCPU(); i++ {
         wg.Add(1)
         go func() {
+            defer wg.Done()
             for f := range tasks {
                 f()
             }
-            wg.Done()
         }()
     }
 
     inTypeList  := []string{"double", "float", "int", "short", "long", "boolean"}
     outTypeList := []string{"double", "float", "int", "short", "long", "boolean"}
+    currentRepo := ""
 
     for 0 < len(searchResp.Items) {
 
         // Dequeues search items, so even if resume search from checkpoint, it won't start from scratch.
-        repo := searchResp.Items[0]
+        savedRepo       := false
+        repo            := searchResp.Items[0]
         searchResp.Items = searchResp.Items[1:]
 
         // url for this particular repo
@@ -323,7 +338,7 @@ func main() {
         fmt.Println("next repo")
         var contentResp []GithubContentResp
         contentQuerySuccess := search(contentQuery, &contentResp, un, pw)
-        // log.Printf("%+v\n", contentResp)
+
         if !contentQuerySuccess {
             searchResp.Items = append(searchResp.Items, repo)
             sleepAndSave(searchResp)
@@ -336,74 +351,80 @@ func main() {
             cont       := contentResp[0]
             contentResp = contentResp[1:]
 
-            if strings.Compare(cont.ContentType, "file") == 0 && strings.HasSuffix(cont.Name, ".java") {
-                saveFile("tmp", cont.Name, httpGet(cont.DownloadURL))
+            tasks <- func() {
+                if strings.Compare(cont.ContentType, "file") == 0 && strings.HasSuffix(cont.Name, ".java") {
+                    saveFile("tmp", cont.Name, httpGet(cont.DownloadURL))
 
-                // Should prompt user for desired function type and even give them a feature for specifying type of search
-                // Maybe they don't want to search for function types
-                tasks <- func() {
+                    // Should prompt user for desired function type and even give them a feature for specifying type of search
+                    // Maybe they don't want to search for function types
                     var funcNames []string
                     var inType string
                     var outType string
 
-                    didFind   := findAndClone(dir, repo.Owner.Login, repo.Name, repo.CloneURL, cont.Name, inTypeList, outTypeList, &funcNames, &inType, &outType)
+                    didFind   := findAndClone(dir, repo.Owner.Login, repo.Name, repo.CloneURL, cont.Name, inTypeList, outTypeList, 
+                                              &funcNames, &inType, &outType)
                     if didFind {
-                        savePath := strings.Join([]string{dir, repo.Owner.Login, repo.Name}, "/")
-                        repoDoc  := RepoDoc{Owner:repo.Owner.Login, RepoName:repo.Name, RepoURL:repo.CloneURL, RepoSizeKB:repo.SizeKB, RepoLang:repo.Language, FilePath:savePath}
-                        didSave  := saveMgoDoc("github_repos", "repository", &repoDoc)
-                        if didSave {
+
+                        if !savedRepo {
+                            savedRepo  := saveMgoDoc("github_repos", "repository",
+                                                     RepoDoc{Owner:repo.Owner.Login, RepoName:repo.Name, RepoURL:repo.CloneURL, 
+                                                     RepoSizeKB:repo.SizeKB, RepoLang:repo.Language, 
+                                                     FilePath:strings.Join([]string{dir, repo.Owner.Login, repo.Name}, "/")})
+                        }
+
+                        if savedRepo {
                             session, err := mgo.Dial("localhost:27017")
+
                             if err != nil {
                                 panic(err)
                             }
+
                             defer session.Close()
                             c := session.DB("github_repos").C("repository")
 
                             repoMgoDoc := RepoDoc{}
                             err = c.Find(bson.M{"reponame":repo.Name}).One(&repoMgoDoc)
+
                             if err != nil {
                                 fmt.Println("error: could not find repository...")
                             }
 
                             fmt.Println(funcNames)
-                            // fmt.Println(repo)
 
                             for _, fname := range funcNames {
-                                funcDoc := FuncDoc{RepoId:repoMgoDoc.getObjectIdStr(), RawURL:cont.DownloadURL, FileName:cont.Name, FuncName:fname, InputType:inType, OutputType:outType, ASTID:"", CFGID:""}
-                                didSave = saveMgoDoc("github_repos", "function", funcDoc)
-                                
+                                didSave = saveMgoDoc("github_repos", "function", 
+                                                     FuncDoc{RepoId:repoMgoDoc.getObjectIdStr(), RawURL:cont.DownloadURL,
+                                                     FileName:cont.Name, FuncName:fname, InputType:inType, OutputType:outType,
+                                                     ASTID:"", CFGID:""})
                                 if !didSave {
                                     log.Fatal("Could not save function to mgo")
                                 }
                             }
                         }
                     }
-                }
+                } else if strings.Compare(cont.ContentType, "dir") == 0 {
+                    // Construct the url to search this sub-directory
+                    // May need to prepend "'User-Agent: <username>'" to api call for correctness
+                    //   Refer to GitHub api doc for more info.
+                    var contentDir bytes.Buffer
+                    contentDir.WriteString("https://api.github.com/repos/")
+                    contentDir.WriteString(strings.Join([]string{repo.Owner.Login, repo.Name, "contents", cont.Name}, "/"))
 
-            } else if strings.Compare(cont.ContentType, "dir") == 0 {
-                // Construct the url to search this sub-directory
-                var contentDir bytes.Buffer
-                contentDir.WriteString("https://api.github.com/repos/")
-                contentDir.WriteString(strings.Join([]string{repo.Owner.Login, repo.Name, "contents", cont.Name}, "/"))
+                    var subdirContentResp []GithubContentResp
+                    contentDirSuccess := search(contentDir, &subdirContentResp, un, pw)
 
-                // fmt.Println(contentDir.String())
-                var subdirContentResp []GithubContentResp
+                    if !contentDirSuccess {
+                        contentResp = append(contentResp, cont)
+                        sleepAndSave(searchResp)
+                    }
 
-                contentDirSuccess := search(contentDir, &subdirContentResp, un, pw)
-                if !contentDirSuccess {
-                    contentResp = append(contentResp, cont)
-                    sleepAndSave(searchResp)
-                }
-                // log.Printf("%+v\n", subdirContentResp)
-
-                for  _, subdirCont := range subdirContentResp {
                     // Enqueue contents of sub-directory
-                    if strings.Compare(subdirCont.ContentType, "file") == 0 && strings.HasSuffix(subdirCont.Name, ".java") {
-                        contentResp = append(contentResp, subdirCont)
-                    } else if strings.Compare(subdirCont.ContentType, "dir") == 0 {
-                        // If a directory, need to prepend current dir's name to its subdir's name so it can search correctly
-                        // in the outter loop above
-                        subdirCont.Name = strings.Join([]string{cont.Name, subdirCont.Name}, "/")
+                    for  _, subdirCont := range subdirContentResp {
+                        if strings.Compare(subdirCont.ContentType, "dir") == 0 {
+                            // If a directory, need to prepend current dir's name to its subdir's name so it can search correctly
+                            // in the outter loop above
+                            subdirCont.Name = strings.Join([]string{cont.Name, subdirCont.Name}, "/")
+                        }
                         contentResp = append(contentResp, subdirCont)
                     }
                 }
@@ -417,12 +438,32 @@ func main() {
     cleanTmp()
 }
 
+func getAuth() (string, string) {
+    files, err := ioutil.ReadDir(".auth/login")
+
+    if err != nil {
+        fmt.Println("error: could not find saved credentials...")
+        log.Fatal(err)
+    }
+
+    // Assuming only one saved user
+    raw, err2 := ioutil.ReadFile(files[0])
+
+    if err2 != nil {
+        fmt.Println("error: could not read credentials...")
+        log.Fatal(err2)
+    }
+
+    cred := strings.Split(raw, "\n")
+    return cred[0], cred[1]
+}
+
 func getLatestCheckpoint() GithubSearchResp {
     // Get all checkpoints in dir
     files, err := ioutil.ReadDir("checkpoints")
 
     if err != nil {
-        fmt.Println("failed to load checkpoint...")
+        fmt.Println("error: failed to load checkpoint...")
         log.Fatal(err)
     }
 
@@ -449,7 +490,7 @@ func mostRecentChkpt(files []os.FileInfo) string {
         }
     }
 
-    return strings.Join(recent, "")
+    return strings.Join(recent, "-")
 }
 
 func loadCheckpoint(file string) GithubSearchResp {
@@ -465,11 +506,34 @@ func loadCheckpoint(file string) GithubSearchResp {
 }
 
 func sleepAndSave(searchResp GithubSearchResp) {
-    t := time.Now()
     marshalledStruct, _ := json.Marshal(searchResp)
-    saveFile("checkpoints", strings.Join([]string{"ckpt-", t.Format("2006-01-02-15-04-05"), ".json"}, ""), string(marshalledStruct))
-    fmt.Println("exhausted request quota...hibernating for an hour...")
-    time.Sleep(3600000 * time.Millisecond)
+    saveFile("checkpoints", strings.Join([]string{"ckpt-", time.Now().Format("2006-01-02-15-04-05"), ".json"}, ""), string(marshalledStruct))
+    waitTime := getWaitTime()
+    fmt.Println("exhausted request quota...hibernating for", waitTime.String())
+    time.Sleep(waitTime)
+}
+
+func getWaitTime() Duration {
+    curl := exec.Command("curl", "-i", "https://api.github.com/")
+    grep  := exec.Command("grep", "X-RateLimit-Reset:")
+    awk   := exec.Command("awk", "{$1=\"\"; print $0}")
+    grep.Stdin, _ = curl.StdoutPipe()
+    awk.Stdin, _  = grep.StdoutPipe()
+    awkOut, _    := awk.StdoutPipe()
+    buff := bufio.NewScanner(awkOut)
+    var header []string
+
+    _ = grep.Start()
+    _ = awk.Start()
+    _ = curl.Run()
+    _ = grep.Wait()
+    defer awk.Wait()
+
+    for buff.Scan() {    
+        header = append(header, buff.Text()+"\n")
+    }
+
+    return time.Unix(header[0], 0).Sub(time.Now())
 }
 
 func search(query bytes.Buffer, queryResp interface{}, username string, password string) bool {
@@ -606,7 +670,7 @@ func containsFuncType(fileName string, inTypeList []string, outTypeList []string
     source := strings.Join([]string{"tmp", fileName}, "/")
 
     ctags := exec.Command("ctags", "-x", "--c-types=f", source)
-    grep  := exec.Command("grep", "method")//getFuncRef(fileName))
+    grep  := exec.Command("grep", "method") //getFuncRef(fileName))
     awk   := exec.Command("awk", "{$1=$2=$3=$4=\"\"; print $0}")
     grep.Stdin, _ = ctags.StdoutPipe()
     awk.Stdin, _  = grep.StdoutPipe()
