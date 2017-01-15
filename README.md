@@ -20,7 +20,22 @@ Refer to [mgo](https://github.com/go-mgo/mgo) for further and more up-to-date in
 
 GOPATH setup
 ```sh
+Linux:
+sudo nano ~/.bashrc
 export GOPATH=$HOME/<path to this repo>
+source ~/.bashrc
+
+Unix:
+sudo nano ~/.bash_profile
+export GOPATH=$HOME/<path to this repo>
+touch ~/.bash_profile
+```
+
+If you get a message about GOPATH not able to find `parse/parseFuncHeader.go`, do the following:
+```sh
+$ cd github-scraper/src/parse
+$ go build
+$ go install
 ```
 
 #### Basic usage:
