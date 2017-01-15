@@ -195,7 +195,7 @@ func main() {
             pw, _ = reader.ReadString('\n')
             pw = strings.Replace(pw, "\n", "", -1)
             fmt.Print("save credentials[y/n]: ")
-            sc, _ = reader.ReadString('\n')
+            sc, _ := reader.ReadString('\n')
             sc = strings.ToLower(strings.Replace(sc, "\n", "", -1))
 
             if strings.Compare(sc, "y") == 0 || strings.Compare(sc, "yes") == 0 {
@@ -287,8 +287,6 @@ func main() {
 
         searchQueue = append(searchQueue, searchQuery)
 
-        isTimeoutSet := false
-
         // searchQueue used in case need to wait for timeout to end
         for 0 < len(searchQueue) {
             searchItem := searchQueue[0]
@@ -320,7 +318,6 @@ func main() {
 
     inTypeList  := []string{"double", "float", "int", "short", "long", "boolean"}
     outTypeList := []string{"double", "float", "int", "short", "long", "boolean"}
-    currentRepo := ""
 
     for 0 < len(searchResp.Items) {
 
@@ -366,7 +363,7 @@ func main() {
                     if didFind {
 
                         if !savedRepo {
-                            savedRepo  := saveMgoDoc("github_repos", "repository",
+                            savedRepo  = saveMgoDoc("github_repos", "repository",
                                                      RepoDoc{Owner:repo.Owner.Login, RepoName:repo.Name, RepoURL:repo.CloneURL, 
                                                      RepoSizeKB:repo.SizeKB, RepoLang:repo.Language, 
                                                      FilePath:strings.Join([]string{dir, repo.Owner.Login, repo.Name}, "/")})
@@ -392,11 +389,11 @@ func main() {
                             fmt.Println(funcNames)
 
                             for _, fname := range funcNames {
-                                didSave = saveMgoDoc("github_repos", "function", 
+                                savedFunc := saveMgoDoc("github_repos", "function", 
                                                      FuncDoc{RepoId:repoMgoDoc.getObjectIdStr(), RawURL:cont.DownloadURL,
                                                      FileName:cont.Name, FuncName:fname, InputType:inType, OutputType:outType,
                                                      ASTID:"", CFGID:""})
-                                if !didSave {
+                                if !savedFunc {
                                     log.Fatal("Could not save function to mgo")
                                 }
                             }
@@ -439,23 +436,27 @@ func main() {
 }
 
 func getAuth() (string, string) {
-    files, err := ioutil.ReadDir(".auth/login")
+    files, err := ioutil.ReadDir(".auth")
 
     if err != nil {
-        fmt.Println("error: could not find saved credentials...")
-        log.Fatal(err)
+        fmt.Println("could not find saved credentials...")
+    } else {
+        // Assuming only one saved user
+        for _, f := range files{
+            if strings.Compare(f.Name(), "login") == 0 {
+                raw, err2 := ioutil.ReadFile(".auth/"+f.Name())
+
+                if err2 != nil {
+                    fmt.Println("error: could not read ./auth/login")
+                } else {
+                    credRaw := string(raw)
+                    cred := strings.Split(credRaw, "\n")
+                    return cred[0], cred[1]
+                }
+            }
+        }
     }
-
-    // Assuming only one saved user
-    raw, err2 := ioutil.ReadFile(files[0])
-
-    if err2 != nil {
-        fmt.Println("error: could not read credentials...")
-        log.Fatal(err2)
-    }
-
-    cred := strings.Split(raw, "\n")
-    return cred[0], cred[1]
+    return "", ""
 }
 
 func getLatestCheckpoint() GithubSearchResp {
@@ -513,7 +514,7 @@ func sleepAndSave(searchResp GithubSearchResp) {
     time.Sleep(waitTime)
 }
 
-func getWaitTime() Duration {
+func getWaitTime() time.Duration {
     curl := exec.Command("curl", "-i", "https://api.github.com/")
     grep  := exec.Command("grep", "X-RateLimit-Reset:")
     awk   := exec.Command("awk", "{$1=\"\"; print $0}")
@@ -533,7 +534,9 @@ func getWaitTime() Duration {
         header = append(header, buff.Text()+"\n")
     }
 
-    return time.Unix(header[0], 0).Sub(time.Now())
+    utcInt64, _ := strconv.ParseInt(strings.TrimSpace(header[0]), 10, 64)
+    
+    return time.Unix(utcInt64, 0).Sub(time.Now())
 }
 
 func search(query bytes.Buffer, queryResp interface{}, username string, password string) bool {

@@ -18,6 +18,11 @@ $ go get gopkg.in/mgo.v2
 ```
 Refer to [mgo](https://github.com/go-mgo/mgo) for further and more up-to-date instructions.
 
+GOPATH setup
+```sh
+export GOPATH=$HOME/<path to this repo>
+```
+
 #### Basic usage:
 ```sh
 $ go run gitscrape.go -q <search terms> -language <programming language>
