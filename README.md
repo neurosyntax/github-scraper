@@ -54,3 +54,12 @@ Look here for more details: [Search code parameters](https://developer.github.co
 [-q, -i, -size, -forks, -forked, -created, -updated, -user, -repo, -lang, -stars -sort -order]
 ```
 Github's API expects the flags to be ordered as in the list above for correct results.
+
+Additional flags:
+```sh
+-a   Start search from April 10th, 2008.
+-mc  Massively clone all repos returned by search. Haven't finished this feature yet.
+```
+
+Note:
+The `-a` flag is meant to try to circumvent the rate limit by searching through time. GitHub's Search API rate limit only allows 1,000 results per unique search and each search must contain some search term specified with `-q` (a single whitespace counts). This means, for example, if you want to search for all repositories written in Java, you will only the first 1,000 from the search even though there are 2,701,409 (at the time of writting this). I could specify a reverse order and get another 1,000 repos from that search, however, I still feel cheated. To get as many repos from a search as possible, specifying `-a` starts the search from the launch date of GitHub and looks for repos when they were created with the `-created` flag and makes the assumption that Java repos are created at a rate of about 1,000 Java repos/6 hours (rough estimate from observing the search api for one minute). To be a bit more conservative, I cut that in half and only search by 3 hour intervals to get as many as possible. You can adjust assumption this as needed.
