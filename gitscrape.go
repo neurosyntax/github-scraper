@@ -98,12 +98,6 @@ type NotFoundResp struct {
     DocURL string `json:"documentation_url"`
 }
 
-/*type ContentLinks struct {
-    Git string `json:"git"`
-    Self string `json:"self"`
-    HTML string `json:"html"`
-}*/
-
 type Document interface {
     getObjectIdStr() string
 }
@@ -158,6 +152,29 @@ type FuncCFG struct {
 
 func (cfg FuncCFG) getObjectIdStr() string {
     return strings.Split(cfg.Id.String(), "\"")[1]
+}
+
+// ISO8601 date format
+type Date struct {
+    CompareOp string
+    UTC time.Time
+}
+
+func GetTime(year int, month int, day int, hour int, min int, sec int) time.Time {
+    if year <= 2007 {
+        log.Printf("warning: year: %d is invalid. GitHub's API does not search back pass 2007", year)
+    }
+    return time.Date(year, time.Month(month), day, hour, min, sec, 0, time.UTC)
+}
+
+func (d Date) Increment(year int, month int, day int, hour int, min int, sec int) time.Time {
+    dur, _ := time.ParseDuration(string(hour)+"h"+string(min)+"m"+string(sec)+"s")
+    return d.UTC.AddDate(year, month, day).Add(dur)
+}
+
+func (d Date) String() string {
+    date := strings.Split(d.UTC.String(), " ")
+    return date[0]+"T"+date[1]+"Z"
 }
 
 func main() {
@@ -241,57 +258,118 @@ func main() {
     flag.Int("size", 1, "Finds repositories that match a certain size (in kilobytes).")
     flag.Int("forks", 0, "Filters repositories based on the number of forks.")
     flag.Bool("fork", false, "Filters whether forked repositories should be included (true) or only forked repositories should be returned (only).")
-    flag.String("created", "", "Filters repositories based on date of creation.")
-    flag.String("updated", "", "Filters repositories based on date they were last updated.")
+    flag.String("created", ">=2007-10-10T00:00:00Z", "Filters repositories based on date of creation.")
+    flag.String("pushed", "", "Filters repositories based on date they were last pushed.")
     flag.String("user", "", "Limits searches to a specific user.")
     flag.String("repo", "", "Limits searches to a specific repository.")
-    flag.String("language", "", "Searches repositories based on the programming language they're written in.")
+    flag.String("language", "Java", "Searches repositories based on the programming language they're written in.")
     flag.Int("stars", 0, "Searches repositories based on the number of stars.")
     flag.String("sort", "", "The sort field. One of stars, forks, or updated. Default: results are sorted by best match.")
     flag.Bool("order", false, "The sort order if sort parameter is provided. One of asc (true) or desc (false). Default: false")
+    flag.Bool("all", false, "Search all repos since April 10th, 2008 (GitHub launch date).")
     flag.Bool("mc", false, "Massively clone all repositories found from search.")
     flag.Parse()
+
+    //>=2007-10-10T00:00:00Z
+    criteria   := map[string]string{"q":"", "in":"", "size":"", "forks":"", "fork":"", "created":"",
+                                   "pushed":"", "updated":"", "user":"", "repo":"", "language":"", "stars":""};
+    parameters := map[string]string{"sort":"", "order":"", "per_page":"100"};
+    additional := map[string]string{"all":"", "mc":""}
 
     // Search query queue
     var searchQueue []bytes.Buffer
     var searchResp GithubSearchResp
+    var searchQueryLeft  string
+    var searchQueryRight string
+    var date = Date{}
 
     if !loadCheckpoint {
         var searchQuery bytes.Buffer
-
-        searchQuery.WriteString("https://api.github.com/search/repositories?q=language:Java&per_page=100")
+        searchQuery.WriteString("https://api.github.com/search/repositories?q=")
+        currentFlag      := ""
 
         // Grab all arguments and create the Github search query
-        // Needs fixing, so commented out for now
-/*        for i, arg := range os.Args {
+        for i, arg := range os.Args {
             arg = strings.ToLower(arg)
-
+            
+            // Skip the first item because it will give something 
+            // like: /tmp/go-build061196966/command-line-arguments/_obj/exe/gitscrape
         	if i > 0 {
         		if strings.HasPrefix(arg, "-") {
-        			if strings.Compare("-q", arg) == 0 {
-    	    			searchQuery.WriteString("q=")
-    		    	} else if strings.Compare("-sort", arg) == 0 {
-    					searchQuery.WriteString("&sort=")
-    				} else if strings.Compare("-order", arg) == 0 {
-    					searchQuery.WriteString("&order=")
-    				} else if strings.Compare("-u", arg) == 0 {
-                        searchQuery.WriteString("&u=")
+                    arg = strings.TrimSpace(arg[1:])
+                    _, cExists := criteria[arg]
+                    _, pExists := parameters[arg] 
+                    _, aExists := additional[arg]
+
+                    if cExists || pExists || aExists {
+                        currentFlag = arg
                     } else {
-    					searchQuery.WriteString("+"+arg[1:]+":")
-    				}
-         		} else {
-                    searchQuery.WriteString(arg)
+                        log.Println(arg," is not a valid flag")
+                    }
+         		} else if len(currentFlag) > 0 {
+                    cVal, cExists := criteria[currentFlag]
+                       _, pExists := parameters[currentFlag] 
+                    arg = strings.TrimSpace(arg)
+
+                    if cExists {
+                        criteria[currentFlag] = cVal+" "+arg
+                    } else if pExists {
+                        parameters[currentFlag] = arg
+                    } 
+                }
+
+                if strings.Compare(currentFlag, "all") == 0 {
+                    var d = GetTime(2008, 4, 11, 0, 0 ,0)
+                    date = Date{">=", d}
+                    criteria["created"] = date.String()
                 }
     		}
-        }*/
+        }
+
+        fmt.Println(criteria["created"])
+
+        criteriaVal := []string{}
+        createdStr  := ""
+
+        // Writer search terms first
+        searchQuery.WriteString(strings.TrimSpace(criteria["q"]))
+
+        // Write the rest of the search criteria
+        for k, v := range criteria {
+            if strings.Compare(k, "q") != 0 && len(v) > 0 {
+                // Should only have either created flag or pushed set, but not both
+                if strings.Compare(k, "created") == 0 {
+                    createdStr = "+"+k+":"+strings.TrimSpace(formatDate(v))
+                    criteria["pushed"] = "" 
+                } else if strings.Compare(k, "pushed") == 0 {
+                    createdStr = "+"+k+":"+strings.TrimSpace(formatDate(v))
+                    criteria["created"] = ""
+                } else {
+                    criteriaVal = append(criteriaVal, "+"+k+":"+strings.TrimSpace(v))
+                }
+            }
+        }
+
+        searchQuery.WriteString(strings.Join(criteriaVal, ""))
+        searchQueryLeft = searchQuery.String()
+        searchQuery.WriteString(createdStr)
+
+        for k, v := range parameters {
+            if len(v) > 0 {
+                searchQueryRight += "&"+k+"="+v
+                searchQuery.WriteString("&"+k+"="+v)
+            }
+        }
 
         searchQueue = append(searchQueue, searchQuery)
+
+        fmt.Println(searchQuery.String())
 
         // searchQueue used in case need to wait for timeout to end
         for 0 < len(searchQueue) {
             searchItem := searchQueue[0]
             searchQueue = searchQueue[:len(searchQueue)-1]
-            successfulSearchQuery := search(searchItem, &searchResp, un, pw)
+            successfulSearchQuery := search(searchItem.String(), &searchResp, un, pw)
 
             if !successfulSearchQuery {
                 searchQueue = append(searchQueue, searchItem)
@@ -302,6 +380,7 @@ func main() {
         searchResp = getLatestCheckpoint()
     }
 
+    log.Printf("%+v\n", searchResp)
     // Spawn W worker goroutines, W = runtime.NumCPU()
     tasks := make(chan func(), runtime.NumCPU())
     var wg sync.WaitGroup
@@ -324,7 +403,31 @@ func main() {
         // Dequeues search items, so even if resume search from checkpoint, it won't start from scratch.
         savedRepo       := false
         repo            := searchResp.Items[0]
-        searchResp.Items = searchResp.Items[1:]
+        searchResp.Items = searchResp.Items[:len(searchResp.Items)-1]
+        searchQueue      = searchQueue[:0]
+
+        // searchResp.Items = searchResp.Items[:0]
+        // Search another 6 hour interval to continue the search
+        if len(additional["all"]) > 0 && len(searchResp.Items) == 0 {
+            // Increment time interval by 6 hours
+            fmt.Println("0 items left: ", date.String())
+            date.UTC = date.Increment(0,0,0,6,0,0)
+            fmt.Println(date.String())
+            var nextQuery bytes.Buffer
+            nextQuery.WriteString(searchQueryLeft+date.String()+searchQueryRight)
+            searchQueue = append(searchQueue, nextQuery)
+
+            for 0 < len(searchQueue) {
+                searchItem := searchQueue[0]
+                searchQueue = searchQueue[:len(searchQueue)-1]
+                successfulSearchQuery := search(searchItem.String(), &searchResp, un, pw)
+
+                if !successfulSearchQuery {
+                    searchQueue = append(searchQueue, searchItem)
+                    sleepAndSave(searchResp)
+                }
+            }
+        }
 
         // url for this particular repo
         var contentQuery bytes.Buffer
@@ -334,7 +437,7 @@ func main() {
         // Get the contents in the home directory of this repo
         fmt.Println("next repo")
         var contentResp []GithubContentResp
-        contentQuerySuccess := search(contentQuery, &contentResp, un, pw)
+        contentQuerySuccess := search(contentQuery.String(), &contentResp, un, pw)
 
         if !contentQuerySuccess {
             searchResp.Items = append(searchResp.Items, repo)
@@ -408,7 +511,7 @@ func main() {
                     contentDir.WriteString(strings.Join([]string{repo.Owner.Login, repo.Name, "contents", cont.Name}, "/"))
 
                     var subdirContentResp []GithubContentResp
-                    contentDirSuccess := search(contentDir, &subdirContentResp, un, pw)
+                    contentDirSuccess := search(contentDir.String(), &subdirContentResp, un, pw)
 
                     if !contentDirSuccess {
                         contentResp = append(contentResp, cont)
@@ -433,6 +536,21 @@ func main() {
     wg.Wait()
 
     cleanTmp()
+}
+
+func formatDate(v string) string {
+    // TODO: Check created data format
+    // If given an exact date and time, must use a qualifier: <, >, <=, >=
+    // e.g. created:>=2008-04-10T23:59:59Z
+    // = is not a valid qualifier. If want equality, omit qualifier
+    // e.g created:2008-04-10
+    // Also check valid ranges for days, hours, minutes, seconds
+    // User can't enter the qualifer as an argument...not sure why, but will need to create anothger flag for them to specify qualifier
+    if strings.Compare(string(v[0]), ">") != 0 || strings.Compare(string(v[0:2]), ">=") != 0 || strings.Compare(string(v[0]), "<") != 0 || strings.Compare(string(v[0:2]), "<=") != 0 {
+        log.Println("default: >= qualifer")
+        return ">="+strings.TrimSpace(strings.ToUpper(v))
+    } 
+    return v
 }
 
 func getAuth() (string, string) {
@@ -535,13 +653,13 @@ func getWaitTime() time.Duration {
     }
 
     utcInt64, _ := strconv.ParseInt(strings.TrimSpace(header[0]), 10, 64)
-    
+
     return time.Unix(utcInt64, 0).Sub(time.Now())
 }
 
-func search(query bytes.Buffer, queryResp interface{}, username string, password string) bool {
+func search(query string, queryResp interface{}, username string, password string) bool {
     client := &http.Client{}
-    req, err := http.NewRequest("GET", query.String(), nil)
+    req, err := http.NewRequest("GET", query, nil)
     
     if strings.Compare(username, "") != 0 && strings.Compare(password, "") != 0 {
         req.SetBasicAuth(username, password)
