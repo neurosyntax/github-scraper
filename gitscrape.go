@@ -738,36 +738,44 @@ func main() {
     inTypeList  := []string{"double", "float", "int", "short", "long", "boolean"}
     outTypeList := []string{"double", "float", "int", "short", "long", "boolean"}
 
-    // fmt.Println("prev: ", prevDate.String())
+    currentPage := 1
 
     for 0 < len(searchResp.Items) {
+
+        // Calculate remaining number of search items to determine if should go to next page
+        pageTotal             := len(searchResp.Items)
+        searchResp.TotalCount -= pageTotal
+
+        fmt.Println(searchResp.TotalCount)
 
         // Dequeues search items, so even if resume search from checkpoint, it won't start from scratch.
         savedRepo       := false
         repo            := searchResp.Items[0]
         searchResp.Items = searchResp.Items[:len(searchResp.Items)-1]
-        searchQueue      = searchQueue[:0]
         maybeNext       := StrTimeDate(repo.CreatedAt)
-        
-        // fmt.Println("next: ", maybeNext)
 
         if maybeNext.After(prevDate) {
-            // fmt.Println(prevDate.String())
             prevDate = maybeNext
-            // fmt.Println(prevDate.String())
         }
 
-        // Search another 6 hour interval to continue the search
         if len(additional["all"]) > 0 && len(searchResp.Items) == 0 {
-            // Increment time interval by 6 hours
-            date.UTC = prevDate
             var nextQuery bytes.Buffer
-            nextQuery.WriteString(searchQueryLeft+date.String()+searchQueryRight)
+
+            if searchResp.TotalCount >= 0 {
+                // Search the next page
+                currentPage += 1
+                nextQuery.WriteString(searchQueryLeft+date.String()+searchQueryRight+"&page="+strconv.Itoa(currentPage))
+            } else {
+                // Search another 6 hour interval to continue the search
+                date.UTC = prevDate
+                nextQuery.WriteString(searchQueryLeft+date.String()+searchQueryRight)
+            }
+
             searchQueue = append(searchQueue, nextQuery)
 
             for 0 < len(searchQueue) {
-                searchItem := searchQueue[0]
-                searchQueue = searchQueue[:len(searchQueue)-1]
+                searchItem            := searchQueue[0]
+                searchQueue            = searchQueue[:len(searchQueue)-1]
                 successfulSearchQuery := search(searchItem.String(), &searchResp, un, pw)
 
                 if !successfulSearchQuery {
