@@ -648,7 +648,6 @@ func main() {
             log.Fatal("\n", lang, " is not supported\nexiting...")
         }
 
-
         criteriaVal := []string{}
         createdStr  := ""
 
