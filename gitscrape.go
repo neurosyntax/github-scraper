@@ -177,10 +177,327 @@ func (d Date) String() string {
     return date[0]+"T"+date[1]+"Z"
 }
 
+func getLangExt (lang string) string {
+    langMap := map[string]string {"c":"c", "c++":"cpp", "cpp":"cpp", "c#":"cs",
+                                  "cs":"cs", "erlang":"erl", "java":"java",
+                                  "javascript":"js", "lisp":"lsp", "lua":"lua", "python":"py"}
+    return langMap[lang]
+}
+
+func getFuncTerm (ext string) string {
+    extMap := map[string]string {"c":"function", "cpp":"function", "cs":"method",
+                                 "erl":"function", "java":"method", "js":"function",
+                                 "lsp":"function", "lua":"function", "py":"function"}
+    return extMap[ext]
+}
+
+func formatDate(v string) string {
+    // TODO: Check created data format
+    // If given an exact date and time, must use a qualifier: <, >, <=, >=
+    // e.g. created:>=2008-04-10T23:59:59Z
+    // = is not a valid qualifier. If want equality, omit qualifier
+    // e.g created:2008-04-10
+    // Also check valid ranges for days, hours, minutes, seconds
+    // User can't enter the qualifer as an argument...not sure why, but will need to create anothger flag for them to specify qualifier
+    if strings.Compare(string(v[0]), ">") != 0 || strings.Compare(string(v[0:2]), ">=") != 0 || strings.Compare(string(v[0]), "<") != 0 || strings.Compare(string(v[0:2]), "<=") != 0 {
+        log.Println("default: >= qualifer")
+        return ">="+strings.TrimSpace(strings.ToUpper(v))
+    } 
+    return v
+}
+
+func getAuth() (string, string) {
+    files, err := ioutil.ReadDir(".auth")
+
+    if err != nil {
+        fmt.Println("could not find saved credentials...")
+    } else {
+        // Assuming only one saved user
+        for _, f := range files{
+            if strings.Compare(f.Name(), "login") == 0 {
+                raw, err2 := ioutil.ReadFile(".auth/"+f.Name())
+
+                if err2 != nil {
+                    fmt.Println("error: could not read ./auth/login")
+                } else {
+                    credRaw := string(raw)
+                    cred := strings.Split(credRaw, "\n")
+                    return cred[0], cred[1]
+                }
+            }
+        }
+    }
+    return "", ""
+}
+
+func getLatestCheckpoint() GithubSearchResp {
+    // Get all checkpoints in dir
+    files, err := ioutil.ReadDir("checkpoints")
+
+    if err != nil {
+        fmt.Println("error: failed to load checkpoint...")
+        log.Fatal(err)
+    }
+
+    // Convert to bytes.Buffer
+    return loadCheckpoint(mostRecentChkpt(files))
+}
+
+func mostRecentChkpt(files []os.FileInfo) string {
+    recent := strings.Split(files[0].Name(), "-")
+    files  = files[1:]
+
+    // Determine the most recent one
+    for _, file := range files {
+        date := strings.Split(file.Name(), "-")
+
+        for i := 1; i < len(date); i++ {
+            r, _ := strconv.Atoi(recent[i])
+            d, _ := strconv.Atoi(date[i])
+
+            if r - d < 0 {
+                recent = date
+                break
+            }
+        }
+    }
+
+    return strings.Join(recent, "-")
+}
+
+func loadCheckpoint(file string) GithubSearchResp {
+    raw, err := ioutil.ReadFile("checkpoints/"+file)
+
+    if err != nil {
+        fmt.Println(err.Error())
+        os.Exit(1)
+    }
+    var jsonChkpt GithubSearchResp
+    json.Unmarshal(raw, &jsonChkpt)
+    return jsonChkpt
+}
+
+func sleepAndSave(searchResp GithubSearchResp) {
+    marshalledStruct, _ := json.Marshal(searchResp)
+    saveFile("checkpoints", strings.Join([]string{"ckpt-", time.Now().Format("2006-01-02-15-04-05"), ".json"}, ""), string(marshalledStruct))
+    waitTime := getWaitTime()
+    fmt.Println("exhausted request quota...hibernating for", waitTime.String())
+    time.Sleep(waitTime)
+}
+
+func getWaitTime() time.Duration {
+    curl := exec.Command("curl", "-i", "https://api.github.com/")
+    grep  := exec.Command("grep", "X-RateLimit-Reset:")
+    awk   := exec.Command("awk", "{$1=\"\"; print $0}")
+    grep.Stdin, _ = curl.StdoutPipe()
+    awk.Stdin, _  = grep.StdoutPipe()
+    awkOut, _    := awk.StdoutPipe()
+    buff := bufio.NewScanner(awkOut)
+    var header []string
+
+    _ = grep.Start()
+    _ = awk.Start()
+    _ = curl.Run()
+    _ = grep.Wait()
+    defer awk.Wait()
+
+    for buff.Scan() {    
+        header = append(header, buff.Text()+"\n")
+    }
+
+    utcInt64, _ := strconv.ParseInt(strings.TrimSpace(header[0]), 10, 64)
+
+    return time.Unix(utcInt64, 0).Sub(time.Now())
+}
+
+func search(query string, queryResp interface{}, username string, password string) bool {
+    client := &http.Client{}
+    req, err := http.NewRequest("GET", query, nil)
+    
+    if strings.Compare(username, "") != 0 && strings.Compare(password, "") != 0 {
+        req.SetBasicAuth(username, password)
+    }
+    
+    resp, err := client.Do(req)
+    
+    check(err)
+    defer resp.Body.Close()
+    body, err := ioutil.ReadAll(resp.Body)
+
+    check(err)
+    err = json.Unmarshal(body, &queryResp)
+    
+    if err != nil {
+        var errorResp NotFoundResp
+        json.Unmarshal(body, &errorResp)
+
+        return !strings.Contains(errorResp.Message, "API rate limit exceeded")
+    }
+
+    return true
+}
+/*
+    http.Get() doesn't count towards the rate limit unless the URL is an API call
+    e.g. Anything beginning with https://api.github.com/
+    This is only used for extracting the source code from the repos and checking the function types
+*/
+func httpGet(url string) string {
+    resp, err := http.Get(url)
+    
+    check(err)
+    defer resp.Body.Close()
+
+    body, err := ioutil.ReadAll(resp.Body)
+
+    return string(body)
+}
+
+func saveFile(saveDir string, fileName string, fileBody string) {
+    f, err := os.Create(strings.Join([]string{saveDir, fileName}, "/"))
+    
+    check(err)
+    defer f.Close()
+    _, err = f.WriteString(fileBody)
+
+    check(err)
+    f.Sync()
+}
+
+func pathExists(dir string)  bool {
+    _, err := os.Stat(dir)
+    
+    if err == nil {
+        return true
+    } else if os.IsNotExist(err) {
+        return false
+    } else {
+        return true
+    }
+}
+    
+func check(e error) {
+    if e != nil {
+        fmt.Println("fatal: exiting...")
+        log.Fatal(e)
+    }
+}
+
+func findAndClone(cloneDir string, owner string, repoName string, repoURL string, fileName string, inTypeList []string, outTypeList []string, funcNames *[]string, inType *string, outType *string) bool {
+    if containsFuncType(fileName, inTypeList, outTypeList, funcNames, inType, outType) {
+        cloneRepo(cloneDir, owner, repoName, repoURL)
+        return true
+    } else {
+        source := strings.Join([]string{"tmp", fileName}, "/")
+        if pathExists(source) {
+            os.Remove(source)
+        }
+    }
+    return false
+}
+
+func cloneRepo(cloneDir string, owner string, repoName string, repoURL string) {
+    cloneDir = strings.Join([]string{cloneDir, owner, repoName}, "/")
+    
+    if !pathExists(cloneDir) {
+        exec.Command("git", "clone", repoURL, cloneDir).Run()
+    }
+}
+
+func saveMgoDoc(dbName string, collectionName string, doc Document) bool {
+    session, err := mgo.Dial("localhost:27017")
+    
+    if err != nil {
+        panic(err)
+    }
+    
+    defer session.Close()
+
+    collection := session.DB(dbName).C(collectionName)
+    err        = collection.Insert(doc)
+
+    if err != nil {
+        log.Printf("failed to insert doc into database...\n", doc)
+        return false
+    }
+
+    return true
+}
+
+/*
+    Searches source code for functions with inType input and outType output
+    Assumes that the file was saved into ./tmp
+*/
+func containsFuncType(fileName string, inTypeList []string, outTypeList []string, funcNames *[]string, inType *string, outType *string) bool {
+
+    source := strings.Join([]string{"tmp", fileName}, "/")
+    fTerm  := strings.Split(fileName, ".")
+
+    ctags := exec.Command("ctags", "-x", "--c-types=f", source)
+    grep  := exec.Command("grep", getFuncTerm(fTerm[1]))
+    awk   := exec.Command("awk", "{$1=$2=$3=$4=\"\"; print $0}")
+    grep.Stdin, _ = ctags.StdoutPipe()
+    awk.Stdin, _  = grep.StdoutPipe()
+    awkOut, _    := awk.StdoutPipe()
+    buff := bufio.NewScanner(awkOut)
+    var funcHeaders []string
+
+    _ = grep.Start()
+    _ = awk.Start()
+    _ = ctags.Run()
+    _ = grep.Wait()
+    defer awk.Wait()
+
+    for buff.Scan() {    
+        funcHeaders = append(funcHeaders, buff.Text()+"\n")
+    }
+
+    // fmt.Println(funcHeaders)
+
+    atLeastOne := false
+
+    for _, header := range funcHeaders {
+        header = strings.TrimSpace(strings.Split(header, "//")[0])
+        parsedHeader := parse.ParseFuncHeader(header, inTypeList, outTypeList, funcNames, inType, outType)
+
+        if parsedHeader {
+            atLeastOne = true
+            funcHeaders = append(funcHeaders, header)
+        }
+    }
+
+    return atLeastOne
+}
+
+func cleanTmp() {
+    os.RemoveAll("tmp")
+}
+
+func massivelyClone(queryRespObj GithubSearchResp, dir string) {
+
+    tasks := make(chan *exec.Cmd, runtime.NumCPU())
+
+    var wg sync.WaitGroup
+
+    for i := 0; i < runtime.NumCPU(); i++ {
+        wg.Add(1)
+        go func() {
+            for cmd := range tasks {
+                cmd.Run()
+            }
+            wg.Done()
+        }()
+    }
+
+    for _, repo := range queryRespObj.Items {
+        tasks <- exec.Command("git", "clone", repo.CloneURL, dir)
+    }
+
+    close(tasks)
+    wg.Wait()
+}
+
 func main() {
     runtime.GOMAXPROCS(runtime.NumCPU())
-    // Load programming language terminology for functions
-    // loadFuncTerms()
 
     // Connect to MongoDB
     session, err := mgo.Dial("localhost:27017")
@@ -272,8 +589,8 @@ func main() {
 
     //>=2007-10-10T00:00:00Z
     criteria   := map[string]string{"q":"", "in":"", "size":"", "forks":"", "fork":"", "created":"",
-                                   "pushed":"", "updated":"", "user":"", "repo":"", "language":"", "stars":""};
-    parameters := map[string]string{"sort":"", "order":"", "per_page":"100"};
+                                   "pushed":"", "updated":"", "user":"", "repo":"", "language":"", "stars":""}
+    parameters := map[string]string{"sort":"", "order":"", "per_page":"100"}
     additional := map[string]string{"all":"", "mc":""}
 
     // Search query queue
@@ -286,7 +603,7 @@ func main() {
     if !loadCheckpoint {
         var searchQuery bytes.Buffer
         searchQuery.WriteString("https://api.github.com/search/repositories?q=")
-        currentFlag      := ""
+        currentFlag := ""
 
         // Grab all arguments and create the Github search query
         for i, arg := range os.Args {
@@ -294,8 +611,8 @@ func main() {
             
             // Skip the first item because it will give something 
             // like: /tmp/go-build061196966/command-line-arguments/_obj/exe/gitscrape
-        	if i > 0 {
-        		if strings.HasPrefix(arg, "-") {
+            if i > 0 {
+                if strings.HasPrefix(arg, "-") {
                     arg = strings.TrimSpace(arg[1:])
                     _, cExists := criteria[arg]
                     _, pExists := parameters[arg] 
@@ -306,7 +623,7 @@ func main() {
                     } else {
                         log.Println(arg," is not a valid flag")
                     }
-         		} else if len(currentFlag) > 0 {
+                } else if len(currentFlag) > 0 {
                     cVal, cExists := criteria[currentFlag]
                        _, pExists := parameters[currentFlag] 
                     arg = strings.TrimSpace(arg)
@@ -323,10 +640,14 @@ func main() {
                     date = Date{">=", d}
                     criteria["created"] = date.String()
                 }
-    		}
+            }
         }
 
-        fmt.Println(criteria["created"])
+        lang, _ := criteria["language"]
+        if len(getLangExt(lang)) == 0 {
+            log.Fatal("\n", lang, " is not supported\nexiting...")
+        }
+
 
         criteriaVal := []string{}
         createdStr  := ""
@@ -536,320 +857,4 @@ func main() {
     wg.Wait()
 
     cleanTmp()
-}
-
-func formatDate(v string) string {
-    // TODO: Check created data format
-    // If given an exact date and time, must use a qualifier: <, >, <=, >=
-    // e.g. created:>=2008-04-10T23:59:59Z
-    // = is not a valid qualifier. If want equality, omit qualifier
-    // e.g created:2008-04-10
-    // Also check valid ranges for days, hours, minutes, seconds
-    // User can't enter the qualifer as an argument...not sure why, but will need to create anothger flag for them to specify qualifier
-    if strings.Compare(string(v[0]), ">") != 0 || strings.Compare(string(v[0:2]), ">=") != 0 || strings.Compare(string(v[0]), "<") != 0 || strings.Compare(string(v[0:2]), "<=") != 0 {
-        log.Println("default: >= qualifer")
-        return ">="+strings.TrimSpace(strings.ToUpper(v))
-    } 
-    return v
-}
-
-func getAuth() (string, string) {
-    files, err := ioutil.ReadDir(".auth")
-
-    if err != nil {
-        fmt.Println("could not find saved credentials...")
-    } else {
-        // Assuming only one saved user
-        for _, f := range files{
-            if strings.Compare(f.Name(), "login") == 0 {
-                raw, err2 := ioutil.ReadFile(".auth/"+f.Name())
-
-                if err2 != nil {
-                    fmt.Println("error: could not read ./auth/login")
-                } else {
-                    credRaw := string(raw)
-                    cred := strings.Split(credRaw, "\n")
-                    return cred[0], cred[1]
-                }
-            }
-        }
-    }
-    return "", ""
-}
-
-func getLatestCheckpoint() GithubSearchResp {
-    // Get all checkpoints in dir
-    files, err := ioutil.ReadDir("checkpoints")
-
-    if err != nil {
-        fmt.Println("error: failed to load checkpoint...")
-        log.Fatal(err)
-    }
-
-    // Convert to bytes.Buffer
-    return loadCheckpoint(mostRecentChkpt(files))
-}
-
-func mostRecentChkpt(files []os.FileInfo) string {
-    recent := strings.Split(files[0].Name(), "-")
-    files  = files[1:]
-
-    // Determine the most recent one
-    for _, file := range files {
-        date := strings.Split(file.Name(), "-")
-
-        for i := 1; i < len(date); i++ {
-            r, _ := strconv.Atoi(recent[i])
-            d, _ := strconv.Atoi(date[i])
-
-            if r - d < 0 {
-                recent = date
-                break
-            }
-        }
-    }
-
-    return strings.Join(recent, "-")
-}
-
-func loadCheckpoint(file string) GithubSearchResp {
-    raw, err := ioutil.ReadFile("checkpoints/"+file)
-
-    if err != nil {
-        fmt.Println(err.Error())
-        os.Exit(1)
-    }
-    var jsonChkpt GithubSearchResp
-    json.Unmarshal(raw, &jsonChkpt)
-    return jsonChkpt
-}
-
-func sleepAndSave(searchResp GithubSearchResp) {
-    marshalledStruct, _ := json.Marshal(searchResp)
-    saveFile("checkpoints", strings.Join([]string{"ckpt-", time.Now().Format("2006-01-02-15-04-05"), ".json"}, ""), string(marshalledStruct))
-    waitTime := getWaitTime()
-    fmt.Println("exhausted request quota...hibernating for", waitTime.String())
-    time.Sleep(waitTime)
-}
-
-func getWaitTime() time.Duration {
-    curl := exec.Command("curl", "-i", "https://api.github.com/")
-    grep  := exec.Command("grep", "X-RateLimit-Reset:")
-    awk   := exec.Command("awk", "{$1=\"\"; print $0}")
-    grep.Stdin, _ = curl.StdoutPipe()
-    awk.Stdin, _  = grep.StdoutPipe()
-    awkOut, _    := awk.StdoutPipe()
-    buff := bufio.NewScanner(awkOut)
-    var header []string
-
-    _ = grep.Start()
-    _ = awk.Start()
-    _ = curl.Run()
-    _ = grep.Wait()
-    defer awk.Wait()
-
-    for buff.Scan() {    
-        header = append(header, buff.Text()+"\n")
-    }
-
-    utcInt64, _ := strconv.ParseInt(strings.TrimSpace(header[0]), 10, 64)
-
-    return time.Unix(utcInt64, 0).Sub(time.Now())
-}
-
-func search(query string, queryResp interface{}, username string, password string) bool {
-    client := &http.Client{}
-    req, err := http.NewRequest("GET", query, nil)
-    
-    if strings.Compare(username, "") != 0 && strings.Compare(password, "") != 0 {
-        req.SetBasicAuth(username, password)
-    }
-    
-    resp, err := client.Do(req)
-    
-    check(err)
-    defer resp.Body.Close()
-    body, err := ioutil.ReadAll(resp.Body)
-
-    check(err)
-    err = json.Unmarshal(body, &queryResp)
-    
-    if err != nil {
-        var errorResp NotFoundResp
-        json.Unmarshal(body, &errorResp)
-
-        return !strings.Contains(errorResp.Message, "API rate limit exceeded")
-    }
-
-    return true
-}
-
-func loadFuncTerms() {
-    // Read in txt file
-    // Loop and build string-to-string map
-    // Return map
-}
-
-/*
-    http.Get() doesn't count towards the rate limit unless the URL is an API call
-    e.g. Anything beginning with https://api.github.com/
-    This is only used for extracting the source code from the repos and checking the function types
-*/
-func httpGet(url string) string {
-    resp, err := http.Get(url)
-    
-    check(err)
-    defer resp.Body.Close()
-
-    body, err := ioutil.ReadAll(resp.Body)
-
-    return string(body)
-}
-
-func saveFile(saveDir string, fileName string, fileBody string) {
-    f, err := os.Create(strings.Join([]string{saveDir, fileName}, "/"))
-    
-    check(err)
-    defer f.Close()
-    _, err = f.WriteString(fileBody)
-
-    check(err)
-    f.Sync()
-}
-
-func pathExists(dir string)  bool {
-    _, err := os.Stat(dir)
-    
-    if err == nil {
-        return true
-    } else if os.IsNotExist(err) {
-        return false
-    } else {
-        return true
-    }
-}
-    
-func check(e error) {
-    if e != nil {
-        fmt.Println("fatal: exiting...")
-        log.Fatal(e)
-    }
-}
-
-func findAndClone(cloneDir string, owner string, repoName string, repoURL string, fileName string, inTypeList []string, outTypeList []string, funcNames *[]string, inType *string, outType *string) bool {
-    if containsFuncType(fileName, inTypeList, outTypeList, funcNames, inType, outType) {
-        cloneRepo(cloneDir, owner, repoName, repoURL)
-        return true
-    } else {
-        source := strings.Join([]string{"tmp", fileName}, "/")
-        if pathExists(source) {
-            os.Remove(source)
-        }
-    }
-    return false
-}
-
-func cloneRepo(cloneDir string, owner string, repoName string, repoURL string) {
-    cloneDir = strings.Join([]string{cloneDir, owner, repoName}, "/")
-    
-    if !pathExists(cloneDir) {
-        exec.Command("git", "clone", repoURL, cloneDir).Run()
-    }
-}
-
-func saveMgoDoc(dbName string, collectionName string, doc Document) bool {
-    session, err := mgo.Dial("localhost:27017")
-    
-    if err != nil {
-        panic(err)
-    }
-    
-    defer session.Close()
-
-    collection := session.DB(dbName).C(collectionName)
-    err        = collection.Insert(doc)
-
-    if err != nil {
-        log.Printf("failed to insert doc into database...\n", doc)
-        return false
-    }
-
-    return true
-}
-
-/*
-    Searches source code for functions with inType input and outType output
-    Assumes that the file was saved into ./tmp
-*/
-func containsFuncType(fileName string, inTypeList []string, outTypeList []string, funcNames *[]string, inType *string, outType *string) bool {
-    // Determine file type using extension in fileName
-    // make a separate function with a lookup table for extension types
-    // then return what ctags refers to functions as in that language
-    // e.g. functions are referred to as members in Python and methods in Java
-    // then replace the second string below in the grep command
-
-    source := strings.Join([]string{"tmp", fileName}, "/")
-
-    ctags := exec.Command("ctags", "-x", "--c-types=f", source)
-    grep  := exec.Command("grep", "method") //getFuncRef(fileName))
-    awk   := exec.Command("awk", "{$1=$2=$3=$4=\"\"; print $0}")
-    grep.Stdin, _ = ctags.StdoutPipe()
-    awk.Stdin, _  = grep.StdoutPipe()
-    awkOut, _    := awk.StdoutPipe()
-    buff := bufio.NewScanner(awkOut)
-    var funcHeaders []string
-
-    _ = grep.Start()
-    _ = awk.Start()
-    _ = ctags.Run()
-    _ = grep.Wait()
-    defer awk.Wait()
-
-    for buff.Scan() {    
-        funcHeaders = append(funcHeaders, buff.Text()+"\n")
-    }
-
-    // fmt.Println(funcHeaders)
-
-    atLeastOne := false
-
-    for _, header := range funcHeaders {
-        header = strings.TrimSpace(strings.Split(header, "//")[0])
-        parsedHeader := parse.ParseFuncHeader(header, inTypeList, outTypeList, funcNames, inType, outType)
-
-        if parsedHeader {
-            atLeastOne = true
-            funcHeaders = append(funcHeaders, header)
-        }
-    }
-
-    return atLeastOne
-}
-
-func cleanTmp() {
-    os.RemoveAll("tmp")
-}
-
-func massivelyClone(queryRespObj GithubSearchResp, dir string) {
-
-    tasks := make(chan *exec.Cmd, runtime.NumCPU())
-
-    var wg sync.WaitGroup
-
-    for i := 0; i < runtime.NumCPU(); i++ {
-        wg.Add(1)
-        go func() {
-            for cmd := range tasks {
-                cmd.Run()
-            }
-            wg.Done()
-        }()
-    }
-
-    for _, repo := range queryRespObj.Items {
-        tasks <- exec.Command("git", "clone", repo.CloneURL, dir)
-    }
-
-    close(tasks)
-    wg.Wait()
 }
