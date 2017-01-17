@@ -2,10 +2,14 @@
 
 Language: Go (Golang)
 
-A tool for scraping repositories using Golang and GitHub API v3.
+A tool for scraping repositories using Golang and GitHub API v3. Assumes you're running Linux or OSX.
 
-#### Setup
-Assumes you're running Linux or OSX, and have Golang and MongoDB installed.
+#### Setup/ Dependencies
+
+[Install MongoDB](https://golang.org/doc/install)
+
+[Install MongoDB](https://docs.mongodb.com/manual/tutorial/install-mongodb-on-ubuntu/)
+
 Install Exuberant Ctags:
 ```sh
 sudo apt install exuberant-ctags
