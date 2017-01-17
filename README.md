@@ -12,7 +12,11 @@ A tool for scraping repositories using Golang and GitHub API v3. Assumes you're 
 
 Install Exuberant Ctags:
 ```sh
+Ubuntu:
 sudo apt install exuberant-ctags
+
+Unix:
+[Download](http://ctags.sourceforge.net/)
 ```
 Install MongoDB driver for Go:
 ```sh
