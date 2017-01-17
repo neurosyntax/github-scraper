@@ -1,5 +1,7 @@
 /*
 	gitscrape.go
+
+    A tool for scraping repositories from GitHub and extracting source code function information using Golang and GitHub API v3.
 	
 	Author: Justin Chen
 	12.19.2016
@@ -7,8 +9,9 @@
 	Boston University 
 	Computer Science
 
-    Dependencies:      exuberant ctags, and mongodb driver for go (http://labix.org/mgo)
-    Operating systems: GNU Linux, OS X
+    Dependencies:        exuberant ctags, and mongodb driver for go (http://labix.org/mgo)
+    Operating systems:   GNU Linux, OS X
+    Supported languages: C, C++, C#, Erlang, Lisp, Lua, Java, Javascript, and Python
 */
 
 package main
@@ -160,13 +163,6 @@ type Date struct {
     UTC time.Time
 }
 
-func GetTime(year int, month int, day int, hour int, min int, sec int) time.Time {
-    if year <= 2007 {
-        log.Printf("warning: year: %d is invalid. GitHub's API does not search back pass 2007", year)
-    }
-    return time.Date(year, time.Month(month), day, hour, min, sec, 0, time.UTC)
-}
-
 func (d Date) Increment(year int, month int, day int, hour int, min int, sec int) time.Time {
     dur, _ := time.ParseDuration(strconv.Itoa(hour)+"h"+strconv.Itoa(min)+"m"+strconv.Itoa(sec)+"s")
     fmt.Println(dur.String())
@@ -176,6 +172,26 @@ func (d Date) Increment(year int, month int, day int, hour int, min int, sec int
 func (d Date) String() string {
     date := strings.Split(d.UTC.String(), " ")
     return date[0]+"T"+date[1]+"Z"
+}
+
+func StrTimeDate(iso string) time.Time {
+    st     := strings.Split(strings.Replace(iso, "Z", "", -1), "T")
+    date   := strings.Split(st[0], "-")
+    ti     := strings.Split(st[1], ":")
+    y, _   := strconv.Atoi(date[0])
+    mo, _  := strconv.Atoi(date[1])
+    d, _   := strconv.Atoi(date[2])
+    h, _   := strconv.Atoi(ti[0])
+    min, _ := strconv.Atoi(ti[1])
+    s, _   := strconv.Atoi(ti[2])
+    return time.Date(y, time.Month(mo), d, h, min, s, 0, time.UTC)
+}
+
+func GetTime(year int, month int, day int, hour int, min int, sec int) time.Time {
+    if year <= 2007 {
+        log.Printf("warning: year: %d is invalid. GitHub's API does not search back pass 2007", year)
+    }
+    return time.Date(year, time.Month(month), day, hour, min, sec, 0, time.UTC)
 }
 
 func getLangExt (lang string) string {
@@ -201,7 +217,7 @@ func formatDate(v string) string {
     // Also check valid ranges for days, hours, minutes, seconds
     // User can't enter the qualifer as an argument...not sure why, but will need to create anothger flag for them to specify qualifier
     if strings.Compare(string(v[0]), ">") != 0 || strings.Compare(string(v[0:2]), ">=") != 0 || strings.Compare(string(v[0]), "<") != 0 || strings.Compare(string(v[0:2]), "<=") != 0 {
-        return ">="+strings.TrimSpace(strings.ToUpper(v))
+        return "<="+strings.TrimSpace(strings.ToUpper(v))
     } 
     return v
 }
@@ -599,6 +615,7 @@ func main() {
     var searchQueryLeft  string
     var searchQueryRight string
     var date = Date{}
+    var prevDate = time.Date(2008, time.April, 10, 0, 0, 0, 0, time.UTC)
 
     if !loadCheckpoint {
         var searchQuery bytes.Buffer
@@ -622,8 +639,9 @@ func main() {
                         currentFlag = arg
 
                         if strings.Compare(currentFlag, "all") == 0 {
-                            var d = GetTime(2008, 4, 11, 0, 0 ,0)
-                            date = Date{">=", d}
+                            // At this exact time and date, there were exactly 1,000 repos written in Java on GitHub
+                            var d = GetTime(2009, 3, 12, 21, 0 ,0) 
+                            date = Date{"<=", d}
                             criteria["created"] = date.String()
                             additional["all"] = "true"
                         }
@@ -644,7 +662,7 @@ func main() {
             }
         }
 
-        lang, _ := criteria["language"]
+        lang := criteria["language"]
         g := getLangExt(lang)
         if len(g) == 0 {
             log.Fatal("\n", lang, " is not supported\nexiting...")
@@ -720,6 +738,8 @@ func main() {
     inTypeList  := []string{"double", "float", "int", "short", "long", "boolean"}
     outTypeList := []string{"double", "float", "int", "short", "long", "boolean"}
 
+    // fmt.Println("prev: ", prevDate.String())
+
     for 0 < len(searchResp.Items) {
 
         // Dequeues search items, so even if resume search from checkpoint, it won't start from scratch.
@@ -727,11 +747,20 @@ func main() {
         repo            := searchResp.Items[0]
         searchResp.Items = searchResp.Items[:len(searchResp.Items)-1]
         searchQueue      = searchQueue[:0]
+        maybeNext       := StrTimeDate(repo.CreatedAt)
+        
+        // fmt.Println("next: ", maybeNext)
+
+        if maybeNext.After(prevDate) {
+            // fmt.Println(prevDate.String())
+            prevDate = maybeNext
+            // fmt.Println(prevDate.String())
+        }
 
         // Search another 6 hour interval to continue the search
         if len(additional["all"]) > 0 && len(searchResp.Items) == 0 {
             // Increment time interval by 6 hours
-            date.UTC = date.Increment(0,0,0,6,0,0)
+            date.UTC = prevDate
             var nextQuery bytes.Buffer
             nextQuery.WriteString(searchQueryLeft+date.String()+searchQueryRight)
             searchQueue = append(searchQueue, nextQuery)
@@ -771,7 +800,7 @@ func main() {
             contentResp = contentResp[1:]
 
             tasks <- func() {
-                if strings.Compare(cont.ContentType, "file") == 0 && strings.HasSuffix(cont.Name, ".java") {
+                if strings.Compare(cont.ContentType, "file") == 0 && strings.HasSuffix(cont.Name, getLangExt(criteria["language"])) {
                     saveFile("tmp", cont.Name, httpGet(cont.DownloadURL))
 
                     // Should prompt user for desired function type and even give them a feature for specifying type of search

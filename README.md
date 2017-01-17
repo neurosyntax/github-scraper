@@ -2,7 +2,7 @@
 
 Language: Go (Golang)
 
-A tool for scraping repositories using Golang and GitHub API v3. Assumes you're running Linux. If running on OSX, use the appropriate dependencies. This script relies on bash commands and so will not work on Windows.
+A tool for scraping repositories from GitHub and extracting source code function information using Golang and GitHub API v3. Assumes you're running Linux. If running on OSX, use the appropriate dependencies. This script relies on bash commands and so will not work on Windows.
 
 Languages currently supported for function extraction: C, C++, C#, Erlang, Java, Javascript, Lisp, Lua, and Python
 
