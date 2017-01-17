@@ -168,7 +168,8 @@ func GetTime(year int, month int, day int, hour int, min int, sec int) time.Time
 }
 
 func (d Date) Increment(year int, month int, day int, hour int, min int, sec int) time.Time {
-    dur, _ := time.ParseDuration(string(hour)+"h"+string(min)+"m"+string(sec)+"s")
+    dur, _ := time.ParseDuration(strconv.Itoa(hour)+"h"+strconv.Itoa(min)+"m"+strconv.Itoa(sec)+"s")
+    fmt.Println(dur.String())
     return d.UTC.AddDate(year, month, day).Add(dur)
 }
 
@@ -181,7 +182,7 @@ func getLangExt (lang string) string {
     langMap := map[string]string {"c":"c", "c++":"cpp", "cpp":"cpp", "c#":"cs",
                                   "cs":"cs", "erlang":"erl", "java":"java",
                                   "javascript":"js", "lisp":"lsp", "lua":"lua", "python":"py"}
-    return langMap[lang]
+    return langMap[strings.TrimSpace(lang)]
 }
 
 func getFuncTerm (ext string) string {
@@ -200,7 +201,6 @@ func formatDate(v string) string {
     // Also check valid ranges for days, hours, minutes, seconds
     // User can't enter the qualifer as an argument...not sure why, but will need to create anothger flag for them to specify qualifier
     if strings.Compare(string(v[0]), ">") != 0 || strings.Compare(string(v[0:2]), ">=") != 0 || strings.Compare(string(v[0]), "<") != 0 || strings.Compare(string(v[0:2]), "<=") != 0 {
-        log.Println("default: >= qualifer")
         return ">="+strings.TrimSpace(strings.ToUpper(v))
     } 
     return v
@@ -620,6 +620,13 @@ func main() {
 
                     if cExists || pExists || aExists {
                         currentFlag = arg
+
+                        if strings.Compare(currentFlag, "all") == 0 {
+                            var d = GetTime(2008, 4, 11, 0, 0 ,0)
+                            date = Date{">=", d}
+                            criteria["created"] = date.String()
+                            additional["all"] = "true"
+                        }
                     } else {
                         log.Println(arg," is not a valid flag")
                     }
@@ -634,17 +641,12 @@ func main() {
                         parameters[currentFlag] = arg
                     } 
                 }
-
-                if strings.Compare(currentFlag, "all") == 0 {
-                    var d = GetTime(2008, 4, 11, 0, 0 ,0)
-                    date = Date{">=", d}
-                    criteria["created"] = date.String()
-                }
             }
         }
 
         lang, _ := criteria["language"]
-        if len(getLangExt(lang)) == 0 {
+        g := getLangExt(lang)
+        if len(g) == 0 {
             log.Fatal("\n", lang, " is not supported\nexiting...")
         }
 
@@ -700,7 +702,7 @@ func main() {
         searchResp = getLatestCheckpoint()
     }
 
-    log.Printf("%+v\n", searchResp)
+    // log.Printf("%+v\n", searchResp)
     // Spawn W worker goroutines, W = runtime.NumCPU()
     tasks := make(chan func(), runtime.NumCPU())
     var wg sync.WaitGroup
@@ -726,13 +728,10 @@ func main() {
         searchResp.Items = searchResp.Items[:len(searchResp.Items)-1]
         searchQueue      = searchQueue[:0]
 
-        // searchResp.Items = searchResp.Items[:0]
         // Search another 6 hour interval to continue the search
         if len(additional["all"]) > 0 && len(searchResp.Items) == 0 {
             // Increment time interval by 6 hours
-            fmt.Println("0 items left: ", date.String())
             date.UTC = date.Increment(0,0,0,6,0,0)
-            fmt.Println(date.String())
             var nextQuery bytes.Buffer
             nextQuery.WriteString(searchQueryLeft+date.String()+searchQueryRight)
             searchQueue = append(searchQueue, nextQuery)
