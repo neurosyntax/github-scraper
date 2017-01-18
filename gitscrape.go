@@ -739,15 +739,9 @@ func main() {
     outTypeList := []string{"double", "float", "int", "short", "long", "boolean"}
 
     currentPage := 1
+    searchTotal := searchResp.TotalCount - len(searchResp.Items)
 
     for 0 < len(searchResp.Items) {
-
-        // Calculate remaining number of search items to determine if should go to next page
-        pageTotal             := len(searchResp.Items)
-        searchResp.TotalCount -= pageTotal
-
-        fmt.Println(searchResp.TotalCount)
-
         // Dequeues search items, so even if resume search from checkpoint, it won't start from scratch.
         savedRepo       := false
         repo            := searchResp.Items[0]
@@ -758,17 +752,21 @@ func main() {
             prevDate = maybeNext
         }
 
+        fmt.Println("all: ",additional["all"]," items: ",strconv.Itoa(len(searchResp.Items))," total: ",searchTotal)
+
         if len(additional["all"]) > 0 && len(searchResp.Items) == 0 {
             var nextQuery bytes.Buffer
+            didResetDate := false
 
-            if searchResp.TotalCount >= 0 {
-                // Search the next page
-                currentPage += 1
-                nextQuery.WriteString(searchQueryLeft+date.String()+searchQueryRight+"&page="+strconv.Itoa(currentPage))
-            } else {
+            if searchTotal <= 0 {
                 // Search another 6 hour interval to continue the search
                 date.UTC = prevDate
                 nextQuery.WriteString(searchQueryLeft+date.String()+searchQueryRight)
+            } else {
+                // Search the next page
+                currentPage += 1
+                nextQuery.WriteString(searchQueryLeft+date.String()+searchQueryRight+"&page="+strconv.Itoa(currentPage))
+                didResetDate = true
             }
 
             searchQueue = append(searchQueue, nextQuery)
@@ -783,6 +781,15 @@ func main() {
                     sleepAndSave(searchResp)
                 }
             }
+
+            // Calculate remaining number of search items to determine if should go to next page
+            // If starts searching from a new date-time, then total_count will change and be updated accordingly
+        	if didResetDate {
+        		searchTotal = searchResp.TotalCount
+        	}
+
+        	pageTotal := len(searchResp.Items)
+            searchTotal -= pageTotal
         }
 
         // url for this particular repo
@@ -791,7 +798,7 @@ func main() {
         contentQuery.WriteString(strings.Join([]string{repo.Owner.Login, repo.Name, "contents"}, "/"))
         
         // Get the contents in the home directory of this repo
-        fmt.Println("next repo")
+        // fmt.Println("next repo")
         var contentResp []GithubContentResp
         contentQuerySuccess := search(contentQuery.String(), &contentResp, un, pw)
 
@@ -845,7 +852,7 @@ func main() {
                                 fmt.Println("error: could not find repository...")
                             }
 
-                            fmt.Println(funcNames)
+                            // fmt.Println(funcNames)
 
                             for _, fname := range funcNames {
                                 savedFunc := saveMgoDoc("github_repos", "function", 
