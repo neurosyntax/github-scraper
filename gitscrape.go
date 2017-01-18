@@ -37,6 +37,15 @@ import (
     "parse"
 )
 
+type Checkpoint struct {
+    LastSearch string
+    CurrentPage int
+    CurrentRepo string
+    SearchResp GithubSearchResp
+    CurrentDate Date
+    NextDate time.Time
+}
+
 // Github Search API response object
 type GithubSearchResp struct {
 	TotalCount int `json:"total_count"`
@@ -246,7 +255,7 @@ func getAuth() (string, string) {
     return "", ""
 }
 
-func getLatestCheckpoint() GithubSearchResp {
+func getLatestCheckpoint() Checkpoint {
     // Get all checkpoints in dir
     files, err := ioutil.ReadDir("checkpoints")
 
@@ -281,20 +290,24 @@ func mostRecentChkpt(files []os.FileInfo) string {
     return strings.Join(recent, "-")
 }
 
-func loadCheckpoint(file string) GithubSearchResp {
+func loadCheckpoint(file string) Checkpoint {
     raw, err := ioutil.ReadFile("checkpoints/"+file)
 
     if err != nil {
         fmt.Println(err.Error())
         os.Exit(1)
+    } else {
+        fmt.Println("loaded checkpoint: ",raw)
     }
-    var jsonChkpt GithubSearchResp
+
+    var jsonChkpt Checkpoint
     json.Unmarshal(raw, &jsonChkpt)
     return jsonChkpt
 }
 
-func sleepAndSave(searchResp GithubSearchResp) {
-    marshalledStruct, _ := json.Marshal(searchResp)
+func sleepAndSave(lastSearch string, currentPage int, currentRepo string, searchResp GithubSearchResp, currDate Date, prevDate time.Time) {
+    checkpoint          := Checkpoint{lastSearch, currentPage, currentRepo, searchResp, currDate, prevDate}
+    marshalledStruct, _ := json.Marshal(checkpoint)
     saveFile("checkpoints", strings.Join([]string{"ckpt-", time.Now().Format("2006-01-02-15-04-05"), ".json"}, ""), string(marshalledStruct))
     waitTime := getWaitTime()
     fmt.Println("exhausted request quota...hibernating for", waitTime.String())
@@ -446,10 +459,15 @@ func saveMgoDoc(dbName string, collectionName string, doc Document) bool {
 func containsFuncType(fileName string, inTypeList []string, outTypeList []string, funcNames *[]string, inType *string, outType *string) bool {
 
     source := strings.Join([]string{"tmp", fileName}, "/")
-    fTerm  := strings.Split(fileName, ".")
+    fName  := strings.Split(fileName, ".")
+    atLeastOne := false
+
+    if len(fName) <= 1 {
+        return atLeastOne
+    }
 
     ctags := exec.Command("ctags", "-x", "--c-types=f", source)
-    grep  := exec.Command("grep", getFuncTerm(fTerm[1]))
+    grep  := exec.Command("grep", getFuncTerm(fName[1]))
     awk   := exec.Command("awk", "{$1=$2=$3=$4=\"\"; print $0}")
     grep.Stdin, _ = ctags.StdoutPipe()
     awk.Stdin, _  = grep.StdoutPipe()
@@ -468,8 +486,6 @@ func containsFuncType(fileName string, inTypeList []string, outTypeList []string
     }
 
     // fmt.Println(funcHeaders)
-
-    atLeastOne := false
 
     for _, header := range funcHeaders {
         header = strings.TrimSpace(strings.Split(header, "//")[0])
@@ -616,6 +632,9 @@ func main() {
     var searchQueryRight string
     var date = Date{}
     var prevDate = time.Date(2008, time.April, 10, 0, 0, 0, 0, time.UTC)
+    currentSearch := ""
+    currentPage   := 1
+    // currentRepo   := ""
 
     if !loadCheckpoint {
         var searchQuery bytes.Buffer
@@ -713,11 +732,17 @@ func main() {
 
             if !successfulSearchQuery {
                 searchQueue = append(searchQueue, searchItem)
-                sleepAndSave(searchResp)
+                sleepAndSave(searchItem.String(), 1, "", searchResp, date, prevDate)
             }
         }
     } else {
-        searchResp = getLatestCheckpoint()
+        checkpt      := getLatestCheckpoint()
+        searchResp    = checkpt.SearchResp
+        currentSearch = checkpt.LastSearch
+        currentPage   = checkpt.CurrentPage
+        // currentRepo   = checkpt.CurrentRepo
+        date          = checkpt.CurrentDate
+        prevDate      = checkpt.NextDate
     }
 
     // log.Printf("%+v\n", searchResp)
@@ -738,8 +763,7 @@ func main() {
     inTypeList  := []string{"double", "float", "int", "short", "long", "boolean"}
     outTypeList := []string{"double", "float", "int", "short", "long", "boolean"}
 
-    currentPage := 1
-    searchTotal := searchResp.TotalCount - len(searchResp.Items)
+    searchTotal   := searchResp.TotalCount - len(searchResp.Items)
 
     for 0 < len(searchResp.Items) {
         // Dequeues search items, so even if resume search from checkpoint, it won't start from scratch.
@@ -778,9 +802,11 @@ func main() {
 
                 if !successfulSearchQuery {
                     searchQueue = append(searchQueue, searchItem)
-                    sleepAndSave(searchResp)
+                    sleepAndSave(searchItem.String(), currentPage, "", searchResp, date, prevDate)
                 }
             }
+
+            currentSearch = nextQuery.String()
 
             // Calculate remaining number of search items to determine if should go to next page
             // If starts searching from a new date-time, then total_count will change and be updated accordingly
@@ -804,7 +830,7 @@ func main() {
 
         if !contentQuerySuccess {
             searchResp.Items = append(searchResp.Items, repo)
-            sleepAndSave(searchResp)
+            sleepAndSave(currentSearch, currentPage, contentQuery.String(), searchResp, date, prevDate)
         }
 
         // BFS on this repo
@@ -878,7 +904,7 @@ func main() {
 
                     if !contentDirSuccess {
                         contentResp = append(contentResp, cont)
-                        sleepAndSave(searchResp)
+                        sleepAndSave(currentSearch, currentPage, contentDir.String(), searchResp, date, prevDate)
                     }
 
                     // Enqueue contents of sub-directory
