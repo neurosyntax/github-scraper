@@ -297,7 +297,7 @@ func loadCheckpoint(file string) Checkpoint {
         fmt.Println(err.Error())
         os.Exit(1)
     } else {
-        fmt.Println("loaded checkpoint: ",raw)
+        fmt.Println("loaded checkpoint: ", file)
     }
 
     var jsonChkpt Checkpoint
@@ -573,7 +573,7 @@ func main() {
         }
     }
 
-    // Directory all desired repos will be cloned to    
+    // Directory that all desired repos will be cloned to    
     fmt.Print("directory to clone all repos to: ")
     dir, _ := reader.ReadString('\n')
     dir = strings.Replace(dir, "\n", "", -1)
@@ -763,17 +763,24 @@ func main() {
     inTypeList  := []string{"double", "float", "int", "short", "long", "boolean"}
     outTypeList := []string{"double", "float", "int", "short", "long", "boolean"}
 
-    searchTotal   := searchResp.TotalCount - len(searchResp.Items)
+    searchTotal := searchResp.TotalCount - len(searchResp.Items)
 
     for 0 < len(searchResp.Items) {
         // Dequeues search items, so even if resume search from checkpoint, it won't start from scratch.
-        savedRepo       := false
+        savedRepo := make(chan bool)
+        
+        go func(){
+            savedRepo <- true
+            close(savedRepo)
+        }()
+
         repo            := searchResp.Items[0]
-        searchResp.Items = searchResp.Items[:len(searchResp.Items)-1]
+        searchResp.Items = searchResp.Items[1:]
         maybeNext       := StrTimeDate(repo.CreatedAt)
 
         if maybeNext.After(prevDate) {
             prevDate = maybeNext
+            fmt.Println(prevDate)
         }
 
         fmt.Println("all: ",additional["all"]," items: ",strconv.Itoa(len(searchResp.Items))," total: ",searchTotal)
@@ -813,9 +820,8 @@ func main() {
         	if didResetDate {
         		searchTotal = searchResp.TotalCount
         	}
-
-        	pageTotal := len(searchResp.Items)
-            searchTotal -= pageTotal
+            
+            searchTotal -= len(searchResp.Items)
         }
 
         // url for this particular repo
@@ -850,44 +856,42 @@ func main() {
                     var inType string
                     var outType string
 
-                    didFind   := findAndClone(dir, repo.Owner.Login, repo.Name, repo.CloneURL, cont.Name, inTypeList, outTypeList, 
+                    didFind := findAndClone(dir, repo.Owner.Login, repo.Name, repo.CloneURL, cont.Name, inTypeList, outTypeList, 
                                               &funcNames, &inType, &outType)
                     if didFind {
+                        ok := <- savedRepo
 
-                        if !savedRepo {
-                            savedRepo  = saveMgoDoc("github_repos", "repository",
-                                                     RepoDoc{Owner:repo.Owner.Login, RepoName:repo.Name, RepoURL:repo.CloneURL, 
-                                                     RepoSizeKB:repo.SizeKB, RepoLang:repo.Language, 
-                                                     FilePath:strings.Join([]string{dir, repo.Owner.Login, repo.Name}, "/")})
+                        if ok {
+                            saveMgoDoc("github_repos", "repository",
+                                        RepoDoc{Owner:repo.Owner.Login, RepoName:repo.Name, RepoURL:repo.CloneURL, 
+                                        RepoSizeKB:repo.SizeKB, RepoLang:repo.Language, 
+                                        FilePath:strings.Join([]string{dir, repo.Owner.Login, repo.Name}, "/")})
+                        }
+                        
+                        // Save function to database
+                        session, err := mgo.Dial("localhost:27017")
+
+                        if err != nil {
+                            panic(err)
                         }
 
-                        if savedRepo {
-                            session, err := mgo.Dial("localhost:27017")
+                        defer session.Close()
+                        c := session.DB("github_repos").C("repository")
 
-                            if err != nil {
-                                panic(err)
-                            }
+                        repoMgoDoc := RepoDoc{}
+                        err = c.Find(bson.M{"reponame":repo.Name}).One(&repoMgoDoc)
 
-                            defer session.Close()
-                            c := session.DB("github_repos").C("repository")
+                        if err != nil {
+                            fmt.Println("error: could not find repository...")
+                        }
 
-                            repoMgoDoc := RepoDoc{}
-                            err = c.Find(bson.M{"reponame":repo.Name}).One(&repoMgoDoc)
-
-                            if err != nil {
-                                fmt.Println("error: could not find repository...")
-                            }
-
-                            // fmt.Println(funcNames)
-
-                            for _, fname := range funcNames {
-                                savedFunc := saveMgoDoc("github_repos", "function", 
-                                                     FuncDoc{RepoId:repoMgoDoc.getObjectIdStr(), RawURL:cont.DownloadURL,
-                                                     FileName:cont.Name, FuncName:fname, InputType:inType, OutputType:outType,
-                                                     ASTID:"", CFGID:""})
-                                if !savedFunc {
-                                    log.Fatal("Could not save function to mgo")
-                                }
+                        for _, fname := range funcNames {
+                            savedFunc := saveMgoDoc("github_repos", "function", 
+                                                 FuncDoc{RepoId:repoMgoDoc.getObjectIdStr(), RawURL:cont.DownloadURL,
+                                                 FileName:cont.Name, FuncName:fname, InputType:inType, OutputType:outType,
+                                                 ASTID:"", CFGID:""})
+                            if !savedFunc {
+                                log.Fatal("Could not save function to mgo")
                             }
                         }
                     }
