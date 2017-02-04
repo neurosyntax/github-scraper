@@ -35,6 +35,7 @@ import (
     "gopkg.in/mgo.v2"
     "gopkg.in/mgo.v2/bson"
     "parse"
+    "hash/fnv"
 )
 
 type Checkpoint struct {
@@ -115,7 +116,7 @@ type Document interface {
 }
 
 type RepoDoc struct {
-    Id         bson.ObjectId `json:"id" bson:"_id,omitempty"`
+    Id         uint32 `json:"id" bson:"_id,omitempty"`
     Owner      string
     RepoName   string
     RepoURL    string
@@ -445,11 +446,17 @@ func saveMgoDoc(dbName string, collectionName string, doc Document) bool {
     err        = collection.Insert(doc)
 
     if err != nil {
-        log.Printf("failed to insert doc into database...\n", doc)
+        //log.Printf("failed to insert doc into database...\n", doc)
         return false
     }
 
     return true
+}
+
+func hash(s string) uint32 {
+    h := fnv.New32a()
+    h.Write([]byte(s))
+    return h.Sum32()
 }
 
 /*
@@ -573,7 +580,7 @@ func main() {
         }
     }
 
-    // Directory that all desired repos will be cloned to    
+    // Directory all desired repos will be cloned to    
     fmt.Print("directory to clone all repos to: ")
     dir, _ := reader.ReadString('\n')
     dir = strings.Replace(dir, "\n", "", -1)
@@ -727,12 +734,30 @@ func main() {
         // searchQueue used in case need to wait for timeout to end
         for 0 < len(searchQueue) {
             searchItem := searchQueue[0]
-            searchQueue = searchQueue[:len(searchQueue)-1]
+            searchQueue = searchQueue[1:]
             successfulSearchQuery := search(searchItem.String(), &searchResp, un, pw)
 
             if !successfulSearchQuery {
                 searchQueue = append(searchQueue, searchItem)
                 sleepAndSave(searchItem.String(), 1, "", searchResp, date, prevDate)
+            }
+        }
+
+        // Search for rest of pages starting from second page
+        pages := math.Ceil(searchResp.TotalCount / 100.0)
+        for p := 2; p <= pages; p++ {
+            var pageResp GithubSearchResp
+            query := searchQueryLeft+date.String()+searchQueryRight+"&page="+strconv.Itoa(p)
+            successfulSearchQuery := search(query, &pageResp, un, pw)
+
+            if !successfulSearchQuery {
+                searchQueue = append(searchQueue, query)
+                sleepAndSave(searchItem.String(), 1, "", searchResp, date, prevDate)
+            }
+
+            // Append all search items from other pages
+            for i := range pageResp.items {
+                searchResp.Items = append(searchResp.Items, i) 
             }
         }
     } else {
@@ -763,24 +788,17 @@ func main() {
     inTypeList  := []string{"double", "float", "int", "short", "long", "boolean"}
     outTypeList := []string{"double", "float", "int", "short", "long", "boolean"}
 
-    searchTotal := searchResp.TotalCount - len(searchResp.Items)
+    searchTotal   := searchResp.TotalCount - len(searchResp.Items)
 
     for 0 < len(searchResp.Items) {
         // Dequeues search items, so even if resume search from checkpoint, it won't start from scratch.
-        savedRepo := make(chan bool)
         
-        go func(){
-            savedRepo <- true
-            close(savedRepo)
-        }()
-
         repo            := searchResp.Items[0]
         searchResp.Items = searchResp.Items[1:]
         maybeNext       := StrTimeDate(repo.CreatedAt)
 
         if maybeNext.After(prevDate) {
             prevDate = maybeNext
-            fmt.Println(prevDate)
         }
 
         fmt.Println("all: ",additional["all"]," items: ",strconv.Itoa(len(searchResp.Items))," total: ",searchTotal)
@@ -793,12 +811,12 @@ func main() {
                 // Search another 6 hour interval to continue the search
                 date.UTC = prevDate
                 nextQuery.WriteString(searchQueryLeft+date.String()+searchQueryRight)
-            } else {
+            } /*else {
                 // Search the next page
                 currentPage += 1
                 nextQuery.WriteString(searchQueryLeft+date.String()+searchQueryRight+"&page="+strconv.Itoa(currentPage))
                 didResetDate = true
-            }
+            }*/
 
             searchQueue = append(searchQueue, nextQuery)
 
@@ -820,8 +838,9 @@ func main() {
         	if didResetDate {
         		searchTotal = searchResp.TotalCount
         	}
-            
-            searchTotal -= len(searchResp.Items)
+
+        	pageTotal := len(searchResp.Items)
+            searchTotal -= pageTotal
         }
 
         // url for this particular repo
@@ -859,14 +878,15 @@ func main() {
                     didFind := findAndClone(dir, repo.Owner.Login, repo.Name, repo.CloneURL, cont.Name, inTypeList, outTypeList, 
                                               &funcNames, &inType, &outType)
                     if didFind {
-                        ok := <- savedRepo
 
-                        if ok {
-                            saveMgoDoc("github_repos", "repository",
-                                        RepoDoc{Owner:repo.Owner.Login, RepoName:repo.Name, RepoURL:repo.CloneURL, 
-                                        RepoSizeKB:repo.SizeKB, RepoLang:repo.Language, 
-                                        FilePath:strings.Join([]string{dir, repo.Owner.Login, repo.Name}, "/")})
-                        }
+                        repoId := hash(Owner:repo.Owner.Login+RepoName:repo.Name)
+
+                        // Will try to insert repo to repository collection and return false if could not
+                        // Will not create duplicates b/c hash is deterministic and owner+reponame is unique
+                        saveMgoDoc("github_repos", "repository",
+                                    RepoDoc{repoId, Owner:repo.Owner.Login, RepoName:repo.Name, RepoURL:repo.CloneURL, 
+                                    RepoSizeKB:repo.SizeKB, RepoLang:repo.Language, 
+                                    FilePath:strings.Join([]string{dir, repo.Owner.Login, repo.Name}, "/")})
                         
                         // Save function to database
                         session, err := mgo.Dial("localhost:27017")
@@ -887,7 +907,7 @@ func main() {
 
                         for _, fname := range funcNames {
                             savedFunc := saveMgoDoc("github_repos", "function", 
-                                                 FuncDoc{RepoId:repoMgoDoc.getObjectIdStr(), RawURL:cont.DownloadURL,
+                                                 FuncDoc{RepoId:repoId, RawURL:cont.DownloadURL,
                                                  FileName:cont.Name, FuncName:fname, InputType:inType, OutputType:outType,
                                                  ASTID:"", CFGID:""})
                             if !savedFunc {
