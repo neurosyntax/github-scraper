@@ -787,18 +787,17 @@ func main() {
 
     inTypeList  := []string{"double", "float", "int", "short", "long", "boolean"}
     outTypeList := []string{"double", "float", "int", "short", "long", "boolean"}
-
-    searchTotal   := searchResp.TotalCount - len(searchResp.Items)
+    searchTotal := len(searchResp.Items)
 
     for 0 < len(searchResp.Items) {
         // Dequeues search items, so even if resume search from checkpoint, it won't start from scratch.
         
         repo            := searchResp.Items[0]
         searchResp.Items = searchResp.Items[1:]
-        maybeNext       := StrTimeDate(repo.CreatedAt)
+        itemDate        := StrTimeDate(repo.CreatedAt)
 
-        if maybeNext.After(prevDate) {
-            prevDate = maybeNext
+        if itemDate.After(prevDate) {
+            prevDate = itemDate
         }
 
         fmt.Println("all: ",additional["all"]," items: ",strconv.Itoa(len(searchResp.Items))," total: ",searchTotal)
@@ -811,12 +810,7 @@ func main() {
                 // Search another 6 hour interval to continue the search
                 date.UTC = prevDate
                 nextQuery.WriteString(searchQueryLeft+date.String()+searchQueryRight)
-            } /*else {
-                // Search the next page
-                currentPage += 1
-                nextQuery.WriteString(searchQueryLeft+date.String()+searchQueryRight+"&page="+strconv.Itoa(currentPage))
-                didResetDate = true
-            }*/
+            }
 
             searchQueue = append(searchQueue, nextQuery)
 
@@ -832,15 +826,6 @@ func main() {
             }
 
             currentSearch = nextQuery.String()
-
-            // Calculate remaining number of search items to determine if should go to next page
-            // If starts searching from a new date-time, then total_count will change and be updated accordingly
-        	if didResetDate {
-        		searchTotal = searchResp.TotalCount
-        	}
-
-        	pageTotal := len(searchResp.Items)
-            searchTotal -= pageTotal
         }
 
         // url for this particular repo
@@ -879,7 +864,7 @@ func main() {
                                               &funcNames, &inType, &outType)
                     if didFind {
 
-                        repoId := hash(Owner:repo.Owner.Login+RepoName:repo.Name)
+                        repoId := hash(repo.Owner.Login+repo.Name)
 
                         // Will try to insert repo to repository collection and return false if could not
                         // Will not create duplicates b/c hash is deterministic and owner+reponame is unique
