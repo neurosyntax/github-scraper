@@ -816,7 +816,7 @@ func main() {
 
             for 0 < len(searchQueue) {
                 searchItem            := searchQueue[0]
-                searchQueue            = searchQueue[:len(searchQueue)-1]
+                searchQueue            = searchQueue[1:]
                 successfulSearchQuery := search(searchItem.String(), &searchResp, un, pw)
 
                 if !successfulSearchQuery {
