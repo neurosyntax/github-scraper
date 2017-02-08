@@ -66,12 +66,6 @@ func main() {
     flag.Bool("mc", false, "Massively clone all repositories found from search.")
     flag.Parse()
 
-    //>=2007-10-10T00:00:00Z
-    criteria   := map[string]string{"q":"", "in":"", "size":"", "forks":"", "fork":"", "created":"",
-                                   "pushed":"", "updated":"", "user":"", "repo":"", "language":"", "stars":""}
-    parameters := map[string]string{"sort":"", "order":"", "per_page":"100"}
-    additional := map[string]string{"all":"", "mc":""}
-
     // Search query queue
     var searchQueue []bytes.Buffer
     var searchResp GithubSearchResp
