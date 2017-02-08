@@ -1,13 +1,13 @@
 /*
-	gitscrape.go
+    gitscrape.go
 
     A tool for scraping repositories from GitHub and extracting source code function information using Golang and GitHub API v3.
-	
-	Author: Justin Chen
-	12.19.2016
+    
+    Author: Justin Chen
+    12.19.2016
 
-	Boston University 
-	Computer Science
+    Boston University 
+    Computer Science
 
     Dependencies:        exuberant ctags, and mongodb driver for go (http://labix.org/mgo)
     Operating systems:   GNU Linux, OS X
@@ -17,17 +17,17 @@
 package main
 
 import (
-	"fmt"
-	"flag"
-	"io/ioutil"
-	"log"
-	"net/http"
-	"encoding/json"
-	"os"
+    "fmt"
+    "flag"
+    "io/ioutil"
+    "log"
+    "net/http"
+    "encoding/json"
+    "os"
     "os/exec"
-	"strings"
+    "strings"
     "strconv"
-	"bytes"
+    "bytes"
     "bufio"
     "sync"
     "runtime"
@@ -35,7 +35,6 @@ import (
     "gopkg.in/mgo.v2"
     "gopkg.in/mgo.v2/bson"
     "parse"
-    "hash/fnv"
 )
 
 type Checkpoint struct {
@@ -49,14 +48,14 @@ type Checkpoint struct {
 
 // Github Search API response object
 type GithubSearchResp struct {
-	TotalCount int `json:"total_count"`
+    TotalCount int `json:"total_count"`
     // IsIncomplete bool `json:"incomplete_results"`
-	Items []Searchitems `json:"items"`
+    Items []Searchitems `json:"items"`
 }
 
 type Searchitems struct {
     // Id int `json:"id"`
-	Name string `json:"name"`
+    Name string `json:"name"`
     // FullName string `json:"full_name"`
     Owner OwnerItem `json:"owner"`
     CloneURL string `json:"clone_url"`
@@ -298,7 +297,7 @@ func loadCheckpoint(file string) Checkpoint {
         fmt.Println(err.Error())
         os.Exit(1)
     } else {
-        fmt.Println("loaded checkpoint: ", file)
+        fmt.Println("loaded checkpoint: ",raw)
     }
 
     var jsonChkpt Checkpoint
@@ -446,17 +445,11 @@ func saveMgoDoc(dbName string, collectionName string, doc Document) bool {
     err        = collection.Insert(doc)
 
     if err != nil {
-        //log.Printf("failed to insert doc into database...\n", doc)
+        log.Printf("failed to insert doc into database...\n", doc)
         return false
     }
 
     return true
-}
-
-func hash(s string) uint32 {
-    h := fnv.New32a()
-    h.Write([]byte(s))
-    return h.Sum32()
 }
 
 /*
@@ -734,30 +727,12 @@ func main() {
         // searchQueue used in case need to wait for timeout to end
         for 0 < len(searchQueue) {
             searchItem := searchQueue[0]
-            searchQueue = searchQueue[1:]
+            searchQueue = searchQueue[:len(searchQueue)-1]
             successfulSearchQuery := search(searchItem.String(), &searchResp, un, pw)
 
             if !successfulSearchQuery {
                 searchQueue = append(searchQueue, searchItem)
                 sleepAndSave(searchItem.String(), 1, "", searchResp, date, prevDate)
-            }
-        }
-
-        // Search for rest of pages starting from second page
-        pages := math.Ceil(searchResp.TotalCount / 100.0)
-        for p := 2; p <= pages; p++ {
-            var pageResp GithubSearchResp
-            query := searchQueryLeft+date.String()+searchQueryRight+"&page="+strconv.Itoa(p)
-            successfulSearchQuery := search(query, &pageResp, un, pw)
-
-            if !successfulSearchQuery {
-                searchQueue = append(searchQueue, query)
-                sleepAndSave(searchItem.String(), 1, "", searchResp, date, prevDate)
-            }
-
-            // Append all search items from other pages
-            for i := range pageResp.items {
-                searchResp.Items = append(searchResp.Items, i) 
             }
         }
     } else {
@@ -787,17 +762,18 @@ func main() {
 
     inTypeList  := []string{"double", "float", "int", "short", "long", "boolean"}
     outTypeList := []string{"double", "float", "int", "short", "long", "boolean"}
-    searchTotal := len(searchResp.Items)
+
+    searchTotal   := searchResp.TotalCount - len(searchResp.Items)
 
     for 0 < len(searchResp.Items) {
         // Dequeues search items, so even if resume search from checkpoint, it won't start from scratch.
-        
+        savedRepo       := false
         repo            := searchResp.Items[0]
-        searchResp.Items = searchResp.Items[1:]
-        itemDate        := StrTimeDate(repo.CreatedAt)
+        searchResp.Items = searchResp.Items[:len(searchResp.Items)-1]
+        maybeNext       := StrTimeDate(repo.CreatedAt)
 
-        if itemDate.After(prevDate) {
-            prevDate = itemDate
+        if maybeNext.After(prevDate) {
+            prevDate = maybeNext
         }
 
         fmt.Println("all: ",additional["all"]," items: ",strconv.Itoa(len(searchResp.Items))," total: ",searchTotal)
@@ -810,13 +786,18 @@ func main() {
                 // Search another 6 hour interval to continue the search
                 date.UTC = prevDate
                 nextQuery.WriteString(searchQueryLeft+date.String()+searchQueryRight)
+            } else {
+                // Search the next page
+                currentPage += 1
+                nextQuery.WriteString(searchQueryLeft+date.String()+searchQueryRight+"&page="+strconv.Itoa(currentPage))
+                didResetDate = true
             }
 
             searchQueue = append(searchQueue, nextQuery)
 
             for 0 < len(searchQueue) {
                 searchItem            := searchQueue[0]
-                searchQueue            = searchQueue[1:]
+                searchQueue            = searchQueue[:len(searchQueue)-1]
                 successfulSearchQuery := search(searchItem.String(), &searchResp, un, pw)
 
                 if !successfulSearchQuery {
@@ -826,6 +807,15 @@ func main() {
             }
 
             currentSearch = nextQuery.String()
+
+            // Calculate remaining number of search items to determine if should go to next page
+            // If starts searching from a new date-time, then total_count will change and be updated accordingly
+            if didResetDate {
+                searchTotal = searchResp.TotalCount
+            }
+
+            pageTotal := len(searchResp.Items)
+            searchTotal -= pageTotal
         }
 
         // url for this particular repo
@@ -860,10 +850,9 @@ func main() {
                     var inType string
                     var outType string
 
-                    didFind := findAndClone(dir, repo.Owner.Login, repo.Name, repo.CloneURL, cont.Name, inTypeList, outTypeList, 
+                    didFind   := findAndClone(dir, repo.Owner.Login, repo.Name, repo.CloneURL, cont.Name, inTypeList, outTypeList, 
                                               &funcNames, &inType, &outType)
                     if didFind {
-
                         repoId := hash(repo.Owner.Login+repo.Name)
 
                         // Will try to insert repo to repository collection and return false if could not
@@ -872,8 +861,7 @@ func main() {
                                     RepoDoc{repoId, Owner:repo.Owner.Login, RepoName:repo.Name, RepoURL:repo.CloneURL, 
                                     RepoSizeKB:repo.SizeKB, RepoLang:repo.Language, 
                                     FilePath:strings.Join([]string{dir, repo.Owner.Login, repo.Name}, "/")})
-                        
-                        // Save function to database
+
                         session, err := mgo.Dial("localhost:27017")
 
                         if err != nil {
@@ -889,7 +877,7 @@ func main() {
                         if err != nil {
                             fmt.Println("error: could not find repository...")
                         }
-
+                        
                         for _, fname := range funcNames {
                             savedFunc := saveMgoDoc("github_repos", "function", 
                                                  FuncDoc{RepoId:repoId, RawURL:cont.DownloadURL,
